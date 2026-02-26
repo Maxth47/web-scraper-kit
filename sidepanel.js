@@ -19,6 +19,7 @@ const STATUS_LABELS = {
   idle: "Ready to extract",
   scrolling: "Loading all results...",
   extracting: "Extracting business data...",
+  "extracting-details": "Enriching with detail data...",
   done: "Extraction complete",
   error: "Not on a Google Maps search page",
   stopped: "Extraction stopped",
@@ -29,8 +30,9 @@ function setStatus(status) {
   statusDot.className = "status-indicator " + status;
 
   statusCard.className = "card";
-  if (status === "scrolling" || status === "extracting") {
+  if (status === "scrolling" || status === "extracting" || status === "extracting-details") {
     statusCard.classList.add("active");
+    statusDot.className = "status-indicator extracting";
   } else if (status === "done") {
     statusCard.classList.add("done");
   } else if (status === "error" || status === "stopped") {
@@ -75,7 +77,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       progressSection.classList.remove("visible");
     }
 
-    if (message.status === "extracting") {
+    if (message.status === "extracting" || message.status === "extracting-details") {
       setProgress(message.count, message.total);
       updateResultCount(message.total || 0);
     }
@@ -178,7 +180,7 @@ downloadBtn.addEventListener("click", () => {
   URL.revokeObjectURL(url);
 });
 
-// Check if there's existing data on panel open
+// Check if there's existing extracted data on panel open
 chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
   if (response && response.data && response.data.length > 0) {
     extractedData = response.data;
@@ -187,5 +189,25 @@ chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
     setStatus("done");
     progressBar.classList.add("done");
     setProgress(extractedData.length, extractedData.length);
+  } else {
+    // No extracted data yet — check how many listings are on the page
+    fetchListingCount();
   }
 });
+
+// Ask the content script for the current listing count on the page
+function fetchListingCount() {
+  chrome.runtime.sendMessage({ type: "get-listing-count" }, (response) => {
+    if (chrome.runtime.lastError) return;
+    if (response && response.count > 0) {
+      updateResultCount(response.count);
+    }
+  });
+}
+
+// Periodically re-check listing count while idle (catches new searches)
+let countInterval = setInterval(() => {
+  if (extractedData.length === 0 && !startBtn.disabled) {
+    fetchListingCount();
+  }
+}, 3000);

@@ -24,7 +24,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   // Relay messages from side panel to content script
-  if (message.type === "start-extraction" || message.type === "stop-extraction") {
+  if (message.type === "start-extraction" || message.type === "stop-extraction" || message.type === "get-listing-count") {
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       if (tabs[0] && tabs[0].url && tabs[0].url.includes("google.com/maps")) {
         chrome.tabs.sendMessage(tabs[0].id, message, (response) => {

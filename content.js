@@ -20,21 +20,27 @@
       sendResponse({ success: true });
       return true;
     }
+
+    if (message.type === "get-listing-count") {
+      const items = getResultItems();
+      sendResponse({ count: items.length });
+      return true;
+    }
   });
 
   function sendProgress(status, count, total) {
-    chrome.runtime.sendMessage({
-      type: "progress",
-      status,
-      count,
-      total,
-    });
+    try {
+      chrome.runtime.sendMessage({ type: "progress", status, count, total });
+    } catch (e) {
+      // Extension context may be invalidated
+    }
   }
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
+  // ── Find the results feed container ──
   function getResultsFeed() {
     return (
       document.querySelector('div[role="feed"]') ||
@@ -42,14 +48,59 @@
     );
   }
 
+  // ── Find all result items using multiple selector strategies ──
   function getResultItems() {
     const feed = getResultsFeed();
     if (!feed) return [];
-    return Array.from(feed.querySelectorAll(':scope > div > div[jsaction]')).filter(
-      (el) => el.querySelector('a[href*="/maps/place/"]')
+
+    // Strategy 1: .Nv2PK is the main result card class (most reliable)
+    let items = Array.from(feed.querySelectorAll('.Nv2PK'));
+    if (items.length > 0) return items;
+
+    // Strategy 2: Find divs containing place links
+    items = Array.from(feed.querySelectorAll('div'))
+      .filter((el) => {
+        const link = el.querySelector('a[href*="/maps/place/"]');
+        if (!link) return false;
+        // Only select the closest container that has the full card content
+        const name = el.querySelector('.fontHeadlineSmall') || el.querySelector('[class*="fontHead"]');
+        return !!name;
+      });
+
+    // Deduplicate: only keep the outermost match (no parent-child dupes)
+    return items.filter(
+      (el) => !items.some((other) => other !== el && other.contains(el))
     );
   }
 
+  // ── Find the scrollable container for the results panel ──
+  function getScrollContainer() {
+    const feed = getResultsFeed();
+    if (!feed) return null;
+
+    // The scrollable div is typically .m6QErb with tabindex="-1" and overflow auto
+    let el = feed.parentElement;
+    while (el && el !== document.body) {
+      const style = getComputedStyle(el);
+      const overflowY = style.overflowY;
+      if (
+        (overflowY === "auto" || overflowY === "scroll") &&
+        el.scrollHeight > el.clientHeight + 10
+      ) {
+        return el;
+      }
+      el = el.parentElement;
+    }
+
+    // Fallback: try known class
+    return (
+      document.querySelector(".m6QErb.DxyBCb.kA9KIf.dS8AEf") ||
+      feed.closest('[tabindex="-1"]') ||
+      feed.parentElement
+    );
+  }
+
+  // ── Auto-scroll the results panel to load all items ──
   async function autoScroll() {
     sendProgress("scrolling", 0, 0);
     const feed = getResultsFeed();
@@ -58,35 +109,32 @@
       return false;
     }
 
-    const scrollContainer =
-      feed.closest('div[role="main"]')?.querySelector("div[tabindex='-1']") ||
-      feed.parentElement;
+    const scrollContainer = getScrollContainer();
+    if (!scrollContainer) {
+      sendProgress("error", 0, 0);
+      return false;
+    }
 
     let previousCount = 0;
     let stableRounds = 0;
-    const maxStableRounds = 3;
+    const maxStableRounds = 5;
 
     while (!shouldStop) {
       const items = getResultItems();
       const currentCount = items.length;
-
       sendProgress("scrolling", currentCount, 0);
 
       if (currentCount === previousCount) {
         stableRounds++;
-        if (stableRounds >= maxStableRounds) {
-          // Check for "end of list" marker
-          const endMarker = feed.querySelector(
-            'span.fontBodyMedium:not([class*="fontTitle"])'
-          );
-          if (
-            endMarker &&
-            endMarker.textContent.includes("You've reached the end")
-          ) {
-            break;
-          }
-          // Also break if truly stable
-          if (stableRounds >= maxStableRounds + 2) break;
+
+        // Check for "end of list" markers
+        const endReached =
+          feed.textContent.includes("You've reached the end") ||
+          feed.textContent.includes("No more results") ||
+          feed.querySelector('span[class*="fontBody"]:-webkit-any(:last-child)')?.textContent?.includes("end");
+
+        if (endReached || stableRounds >= maxStableRounds) {
+          break;
         }
       } else {
         stableRounds = 0;
@@ -94,25 +142,17 @@
 
       previousCount = currentCount;
 
-      // Scroll the feed container
-      if (scrollContainer) {
-        scrollContainer.scrollTop = scrollContainer.scrollHeight;
-      } else {
-        feed.scrollTop = feed.scrollHeight;
-      }
+      // Scroll to bottom
+      scrollContainer.scrollTop = scrollContainer.scrollHeight;
 
-      await sleep(1500 + Math.random() * 500);
+      // Randomized delay to avoid detection
+      await sleep(1500 + Math.random() * 1000);
     }
 
     return !shouldStop;
   }
 
-  function extractTextNear(element, label) {
-    if (!element) return "";
-    const text = element.textContent || "";
-    return text.trim();
-  }
-
+  // ── Extract data from a single list item card ──
   function extractFromListItem(item) {
     const data = {
       name: "",
@@ -123,262 +163,304 @@
       reviewCount: "",
       category: "",
       hours: "",
+      priceLevel: "",
     };
 
-    // Name: typically in a heading-like element or an anchor with specific class
+    // ── Name ──
     const nameEl =
       item.querySelector(".fontHeadlineSmall") ||
-      item.querySelector('a[aria-label] div[class*="fontHead"]') ||
-      item.querySelector("a[aria-label]");
+      item.querySelector('[class*="fontHead"]');
     if (nameEl) {
-      data.name =
-        nameEl.getAttribute("aria-label") || nameEl.textContent?.trim() || "";
+      data.name = nameEl.textContent?.trim() || "";
+    }
+    // Fallback: aria-label on the main link
+    if (!data.name) {
+      const link = item.querySelector("a.hfpxzc") || item.querySelector('a[href*="/maps/place/"]');
+      if (link) {
+        data.name = link.getAttribute("aria-label") || "";
+      }
     }
 
-    // Rating & reviews from aria-label like "4.5 stars 200 Reviews"
-    const ratingEl = item.querySelector('span[role="img"]');
-    if (ratingEl) {
-      const ariaLabel = ratingEl.getAttribute("aria-label") || "";
+    // ── Rating & Review Count from aria-label ──
+    const ratingImg = item.querySelector('span[role="img"]');
+    if (ratingImg) {
+      const ariaLabel = ratingImg.getAttribute("aria-label") || "";
       const ratingMatch = ariaLabel.match(/([\d.]+)\s*star/i);
       if (ratingMatch) data.rating = ratingMatch[1];
-      const reviewMatch = ariaLabel.match(/([\d,]+)\s*review/i);
+      const reviewMatch = ariaLabel.match(/([\d,]+)\s*[Rr]eview/);
       if (reviewMatch) data.reviewCount = reviewMatch[1].replace(/,/g, "");
     }
 
-    // If rating not found via aria-label, try text content
+    // Fallback rating from text like "4.7"
     if (!data.rating) {
       const spans = item.querySelectorAll("span");
       for (const span of spans) {
-        const text = span.textContent?.trim() || "";
-        if (/^\d\.\d$/.test(text)) {
-          data.rating = text;
+        const t = span.textContent?.trim() || "";
+        if (/^\d\.\d$/.test(t)) {
+          data.rating = t;
           break;
         }
       }
     }
 
-    // Review count from parenthesized number like (200)
+    // Fallback review count from parenthesized number like (1,278)
     if (!data.reviewCount) {
       const allText = item.textContent || "";
       const parenMatch = allText.match(/\(([\d,]+)\)/);
       if (parenMatch) data.reviewCount = parenMatch[1].replace(/,/g, "");
     }
 
-    // Extract info lines: category, address, hours, phone, website
-    // These are typically in spans/divs after the rating section
-    const infoContainer = item.querySelectorAll(
-      '.fontBodyMedium, [class*="fontBody"]'
-    );
-    const infoTexts = [];
-    infoContainer.forEach((el) => {
-      const directText = Array.from(el.childNodes)
-        .filter((n) => n.nodeType === Node.TEXT_NODE || n.tagName === "SPAN")
-        .map((n) => n.textContent?.trim())
-        .filter(Boolean)
-        .join(" ");
-      if (directText && directText.length > 1) {
-        infoTexts.push(directText);
+    // ── Parse W4Efsd info sections ──
+    // Structure: multiple .W4Efsd elements containing category, address, hours, etc.
+    const w4Sections = item.querySelectorAll(".W4Efsd");
+    const infoLines = [];
+
+    w4Sections.forEach((section) => {
+      // Get the nested .W4Efsd if it exists (the actual info row)
+      const nested = section.querySelector(":scope > .W4Efsd");
+      const target = nested || section;
+
+      const spans = target.querySelectorAll(":scope > span");
+      const parts = [];
+      spans.forEach((span) => {
+        const text = span.textContent?.trim();
+        if (text && text !== "·" && text !== "· " && text.length > 0) {
+          // Clean leading middot
+          parts.push(text.replace(/^·\s*/, "").trim());
+        }
+      });
+
+      if (parts.length > 0) {
+        infoLines.push(parts);
       }
     });
 
-    // Parse info lines heuristically
-    for (const text of infoTexts) {
-      // Phone patterns
-      if (
-        /[\(+]?\d{1,4}[\s\-\)]+\d/.test(text) &&
-        text.replace(/[\s\-\(\)]/g, "").length >= 10 &&
-        !data.phone
-      ) {
-        const phoneMatch = text.match(
-          /[\(+]?\d[\d\s\-\(\)]{8,}/
-        );
-        if (phoneMatch) data.phone = phoneMatch[0].trim();
-      }
+    // Parse the info lines
+    // Typical pattern:
+    //   Line 0: ["4.7(1,278)", "· $1–10"]  (rating row - skip)
+    //   Line 1: ["Coffee shop", "", "1030 Washington St"]  (category + address)
+    //   Line 2: same as line 1 (duplicate from nested structure)
+    //   Line 3: ["Snug, minimalist cafe..."]  (description)
+    //   Line 4: ["Open · Closes 2.00 pm"]  (hours)
 
-      // Website (link element)
-      if (!data.website) {
-        const linkEls = item.querySelectorAll("a[href]");
-        for (const link of linkEls) {
-          const href = link.href || "";
-          if (
-            href &&
-            !href.includes("google.com") &&
-            !href.includes("gstatic") &&
-            !href.startsWith("javascript")
-          ) {
-            data.website = href;
-            break;
-          }
+    const seen = new Set();
+    for (const parts of infoLines) {
+      const lineText = parts.join(" ");
+
+      // Skip duplicate lines
+      if (seen.has(lineText)) continue;
+      seen.add(lineText);
+
+      // Skip rating line
+      if (/^\d\.\d.*\(\d/.test(lineText)) continue;
+
+      for (const part of parts) {
+        if (!part || part.length === 0) continue;
+
+        // Hours detection
+        if (
+          !data.hours &&
+          /\b(open|closed|opens?|closes?|24\s*hours?)\b/i.test(part)
+        ) {
+          data.hours = part.trim();
+          continue;
         }
-      }
 
-      // Category: usually short text like "Coffee shop", "Restaurant"
-      if (
-        !data.category &&
-        text.length < 40 &&
-        !text.includes("Open") &&
-        !text.includes("Closed") &&
-        !/\d{3}/.test(text)
-      ) {
-        // Likely a category if it's a short descriptor
-        const parts = text.split("·").map((p) => p.trim());
-        if (parts.length > 0 && parts[0].length < 30) {
-          data.category = parts[0];
+        // Price level like "$1–10" or "$$"
+        if (!data.priceLevel && /^\$/.test(part)) {
+          data.priceLevel = part;
+          continue;
         }
-      }
 
-      // Hours
-      if (/open|closed|hours|24\s*hours/i.test(text) && !data.hours) {
-        const hoursMatch = text.match(
-          /(open|closed|opens?|closes?)[\s·:]*[^·]*/i
-        );
-        if (hoursMatch) data.hours = hoursMatch[0].trim();
-      }
+        // Category: short text, no digits, no commas (appears first in the info line)
+        if (
+          !data.category &&
+          part.length < 35 &&
+          !/\d/.test(part) &&
+          !part.includes(",") &&
+          !/\b(open|closed|closes?|opens?)\b/i.test(part)
+        ) {
+          data.category = part;
+          continue;
+        }
 
-      // Address: typically contains street indicators or comma-separated location
-      if (
-        !data.address &&
-        (text.includes(",") || /\d+\s+\w+\s+(st|ave|rd|blvd|dr|ln|way|ct)/i.test(text))
-      ) {
-        data.address = text.split("·")[0]?.trim() || text;
+        // Address: contains street number or comma-separated location
+        if (
+          !data.address &&
+          (/\d+\s+\w/.test(part) || part.includes(",")) &&
+          part.length > 5 &&
+          part.length < 120 &&
+          !/star|review|\(\d/i.test(part)
+        ) {
+          data.address = part;
+          continue;
+        }
       }
     }
 
-    // Fallback address extraction from W-prefixed divs or detail divs
-    if (!data.address) {
-      const allDivs = item.querySelectorAll("div, span");
-      for (const div of allDivs) {
-        const t = div.textContent?.trim() || "";
-        if (
-          t.length > 10 &&
-          t.length < 100 &&
-          t.includes(",") &&
-          !t.includes("star") &&
-          !t.includes("review")
-        ) {
-          data.address = t;
-          break;
-        }
+    // ── Website: look for non-Google external links ──
+    const allLinks = item.querySelectorAll("a[href]");
+    for (const link of allLinks) {
+      const href = link.href || "";
+      if (
+        href &&
+        !href.includes("google.com") &&
+        !href.includes("google.") &&
+        !href.includes("gstatic") &&
+        !href.includes("googleapis") &&
+        !href.startsWith("javascript") &&
+        !href.startsWith("data:")
+      ) {
+        data.website = href;
+        break;
       }
+    }
+
+    // ── Phone: look for tel: links or phone patterns in text ──
+    const telLink = item.querySelector('a[href^="tel:"]');
+    if (telLink) {
+      data.phone = telLink.href.replace("tel:", "").trim();
     }
 
     return data;
   }
 
-  async function extractWithClickThrough(items) {
-    const results = [];
-    const total = items.length;
-
-    for (let i = 0; i < items.length; i++) {
+  // ── Click-through extraction for missing fields ──
+  async function enrichWithDetailPanel(items, results) {
+    for (let i = 0; i < results.length; i++) {
       if (shouldStop) break;
 
-      sendProgress("extracting", i + 1, total);
+      const data = results[i];
+      const item = items[i];
 
-      // First extract what we can from the list view
-      const baseData = extractFromListItem(items[i]);
+      // Only click through if we're missing important fields
+      const needsDetail = !data.phone || !data.website || !data.address;
+      if (!needsDetail) continue;
 
-      // Click the item to get detail panel data
-      const link = items[i].querySelector('a[href*="/maps/place/"]');
-      if (link && (!baseData.phone || !baseData.website || !baseData.hours)) {
-        try {
-          link.click();
-          await sleep(2000 + Math.random() * 500);
+      sendProgress("extracting-details", i + 1, results.length);
 
-          // Extract from the detail panel
-          const detailPanel =
-            document.querySelector('div[role="main"][aria-label]') ||
-            document.querySelector(".m6QErb.WNBkOb");
+      try {
+        // Click the main link overlay
+        const link =
+          item.querySelector("a.hfpxzc") ||
+          item.querySelector('a[href*="/maps/place/"]');
+        if (!link) continue;
 
-          if (detailPanel) {
-            // Phone
-            if (!baseData.phone) {
-              const phoneButton = detailPanel.querySelector(
-                'button[data-item-id*="phone"], button[aria-label*="Phone"]'
-              );
-              if (phoneButton) {
-                baseData.phone =
-                  phoneButton.getAttribute("aria-label")?.replace(/Phone:\s*/i, "").trim() ||
-                  phoneButton.textContent?.trim() ||
-                  "";
-              }
-            }
+        link.click();
+        await sleep(2500 + Math.random() * 500);
 
-            // Website
-            if (!baseData.website) {
-              const websiteLink = detailPanel.querySelector(
-                'a[data-item-id*="authority"], a[aria-label*="Website"]'
-              );
-              if (websiteLink) {
-                baseData.website = websiteLink.href || "";
-              }
-            }
-
-            // Address
-            if (!baseData.address) {
-              const addressButton = detailPanel.querySelector(
-                'button[data-item-id*="address"], button[aria-label*="Address"]'
-              );
-              if (addressButton) {
-                baseData.address =
-                  addressButton.getAttribute("aria-label")?.replace(/Address:\s*/i, "").trim() ||
-                  addressButton.textContent?.trim() ||
-                  "";
-              }
-            }
-
-            // Hours
-            if (!baseData.hours) {
-              const hoursEl = detailPanel.querySelector(
-                'div[aria-label*="hour"], button[aria-label*="hour"]'
-              );
-              if (hoursEl) {
-                const label = hoursEl.getAttribute("aria-label") || "";
-                baseData.hours =
-                  label.split(".")[0]?.trim() || hoursEl.textContent?.trim() || "";
-              }
-            }
-
-            // Category
-            if (!baseData.category) {
-              const categoryButton = detailPanel.querySelector(
-                'button[jsaction*="category"]'
-              );
-              if (categoryButton) {
-                baseData.category = categoryButton.textContent?.trim() || "";
-              }
-            }
-          }
-
-          // Go back to list view
-          const backButton = document.querySelector(
-            'button[aria-label="Back"], button[jsaction*="back"]'
+        // Wait for detail panel to load - look for info buttons
+        let retries = 0;
+        let detailLoaded = false;
+        while (retries < 4 && !detailLoaded) {
+          detailLoaded = !!document.querySelector(
+            'button[data-item-id*="phone"], button[data-item-id*="address"], a[data-item-id*="authority"]'
           );
-          if (backButton) {
-            backButton.click();
-            await sleep(1500 + Math.random() * 500);
+          if (!detailLoaded) {
+            await sleep(800);
+            retries++;
           }
-        } catch (e) {
-          console.warn("Click-through extraction failed for item", i, e);
         }
+
+        if (detailLoaded) {
+          // Phone
+          if (!data.phone) {
+            const phoneBtn = document.querySelector(
+              'button[data-item-id*="phone"]'
+            );
+            if (phoneBtn) {
+              const label = phoneBtn.getAttribute("aria-label") || "";
+              data.phone =
+                label.replace(/^Phone:\s*/i, "").trim() ||
+                phoneBtn.textContent?.replace(/[^\d\s\-\(\)+]/g, "").trim() ||
+                "";
+            }
+          }
+
+          // Website
+          if (!data.website) {
+            const webLink = document.querySelector(
+              'a[data-item-id*="authority"]'
+            );
+            if (webLink) {
+              data.website = webLink.href || "";
+            }
+          }
+
+          // Address
+          if (!data.address) {
+            const addrBtn = document.querySelector(
+              'button[data-item-id*="address"]'
+            );
+            if (addrBtn) {
+              const label = addrBtn.getAttribute("aria-label") || "";
+              data.address =
+                label.replace(/^Address:\s*/i, "").trim() ||
+                addrBtn.textContent?.trim() ||
+                "";
+            }
+          }
+
+          // Hours
+          if (!data.hours) {
+            const hoursEl = document.querySelector(
+              '[data-item-id*="oh"], [aria-label*="hour" i]'
+            );
+            if (hoursEl) {
+              const label = hoursEl.getAttribute("aria-label") || "";
+              data.hours =
+                label.split(".")[0]?.trim() || hoursEl.textContent?.trim() || "";
+            }
+          }
+
+          // Category
+          if (!data.category) {
+            const catBtn = document.querySelector(
+              'button[jsaction*="category"]'
+            );
+            if (catBtn) {
+              data.category = catBtn.textContent?.trim() || "";
+            }
+          }
+        }
+
+        // Navigate back to the search results list
+        const backBtn = document.querySelector(
+          'button[aria-label="Back"], button[jsaction*="back"]'
+        );
+        if (backBtn) {
+          backBtn.click();
+          await sleep(2000 + Math.random() * 500);
+        } else {
+          // Fallback: use browser history
+          history.back();
+          await sleep(2500);
+        }
+
+        // Wait for list to reappear
+        let listRetries = 0;
+        while (listRetries < 5 && !getResultsFeed()) {
+          await sleep(800);
+          listRetries++;
+        }
+      } catch (e) {
+        console.warn("Click-through failed for item", i, e);
       }
-
-      results.push(baseData);
     }
-
-    return results;
   }
 
+  // ── Main extraction flow ──
   async function runExtraction() {
     try {
       // Step 1: Auto-scroll to load all results
-      const scrolled = await autoScroll();
+      await autoScroll();
       if (shouldStop) {
         sendProgress("stopped", 0, 0);
         isExtracting = false;
         return;
       }
 
-      // Step 2: Get all result items
+      // Step 2: Get all loaded result items
       const items = getResultItems();
       if (items.length === 0) {
         sendProgress("error", 0, 0);
@@ -386,10 +468,14 @@
         return;
       }
 
+      // Step 3: Extract data from list view
       sendProgress("extracting", 0, items.length);
-
-      // Step 3: Extract data with click-through for missing fields
-      const results = await extractWithClickThrough(items);
+      const results = [];
+      for (let i = 0; i < items.length; i++) {
+        if (shouldStop) break;
+        sendProgress("extracting", i + 1, items.length);
+        results.push(extractFromListItem(items[i]));
+      }
 
       if (shouldStop) {
         sendProgress("stopped", results.length, items.length);
@@ -397,7 +483,16 @@
         return;
       }
 
-      // Step 4: Send results to background
+      // Step 4: Enrich with click-through for missing phone/website
+      await enrichWithDetailPanel(items, results);
+
+      if (shouldStop) {
+        sendProgress("stopped", results.length, items.length);
+        isExtracting = false;
+        return;
+      }
+
+      // Step 5: Send results to background
       chrome.runtime.sendMessage({
         type: "extraction-data",
         data: results,
