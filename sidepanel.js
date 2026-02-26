@@ -1,3 +1,4 @@
+// ── DOM refs ──
 const statusEl = document.getElementById("status");
 const statusDot = document.getElementById("statusDot");
 const statusCard = document.getElementById("statusCard");
@@ -7,22 +8,63 @@ const progressText = document.getElementById("progressText");
 const progressPct = document.getElementById("progressPct");
 const resultCount = document.getElementById("resultCount");
 const fieldCount = document.getElementById("fieldCount");
+const optimizeBtn = document.getElementById("optimizeBtn");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 const errorMsg = document.getElementById("errorMsg");
 const errorText = document.getElementById("errorText");
 
-let extractedData = [];
+// Data tab refs
+const dataCount = document.getElementById("dataCount");
+const dataDownloadBtn = document.getElementById("dataDownloadBtn");
+const dataClearBtn = document.getElementById("dataClearBtn");
+const dataEmpty = document.getElementById("dataEmpty");
+const dataTableWrap = document.getElementById("dataTableWrap");
+const dataBody = document.getElementById("dataBody");
 
+// History tab refs
+const historyEmpty = document.getElementById("historyEmpty");
+const historyList = document.getElementById("historyList");
+
+let extractedData = [];
+let historyEntries = [];
+
+// Load history from localStorage
+try {
+  historyEntries = JSON.parse(localStorage.getItem("extractionHistory") || "[]");
+} catch (e) {
+  historyEntries = [];
+}
+
+// ── Tab switching ──
+const tabs = document.querySelectorAll(".tab");
+const tabContents = document.querySelectorAll(".tab-content");
+
+tabs.forEach((tab) => {
+  tab.addEventListener("click", () => {
+    const target = tab.dataset.tab;
+    tabs.forEach((t) => t.classList.remove("active"));
+    tabContents.forEach((tc) => tc.classList.remove("active"));
+    tab.classList.add("active");
+    document.getElementById("tab-" + target).classList.add("active");
+
+    // Refresh tab content when switching
+    if (target === "data") refreshDataTab();
+    if (target === "history") renderHistory();
+  });
+});
+
+// ── Status ──
 const STATUS_LABELS = {
   idle: "Ready to extract",
   scrolling: "Loading all results...",
+  "optimize-done": "Fetching complete \u2014 ready to extract",
   extracting: "Extracting business data...",
   "extracting-details": "Enriching with detail data...",
   done: "Extraction complete",
   error: "Not on a Google Maps search page",
-  stopped: "Extraction stopped",
+  stopped: "Operation stopped",
 };
 
 function setStatus(status) {
@@ -33,8 +75,9 @@ function setStatus(status) {
   if (status === "scrolling" || status === "extracting" || status === "extracting-details") {
     statusCard.classList.add("active");
     statusDot.className = "status-indicator extracting";
-  } else if (status === "done") {
+  } else if (status === "done" || status === "optimize-done") {
     statusCard.classList.add("done");
+    statusDot.className = "status-indicator done";
   } else if (status === "error" || status === "stopped") {
     statusCard.classList.add("error");
   }
@@ -58,7 +101,8 @@ function showError(msg) {
   }, 5000);
 }
 
-function setExtracting(active) {
+function setBusy(active) {
+  optimizeBtn.disabled = active;
   startBtn.disabled = active;
   stopBtn.disabled = !active;
 }
@@ -67,7 +111,45 @@ function updateResultCount(count) {
   resultCount.textContent = count;
 }
 
-// Listen for progress messages from content script
+// ── Data received → update data tab + save history ──
+function onDataReceived() {
+  refreshDataTab();
+  dataDownloadBtn.disabled = extractedData.length === 0;
+  dataClearBtn.disabled = extractedData.length === 0;
+}
+
+function saveToHistory(data, status) {
+  if (data.length === 0) return;
+
+  // Try to get the search query from the page title or URL
+  const entry = {
+    id: Date.now(),
+    date: new Date().toISOString(),
+    count: data.length,
+    status: status,
+    query: "", // Will be filled if we can detect it
+  };
+
+  // Try to detect search query from the active tab
+  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+    if (tabs[0] && tabs[0].url) {
+      const url = new URL(tabs[0].url);
+      const searchParam = url.searchParams.get("q") || url.pathname.split("/search/")[1] || "";
+      entry.query = decodeURIComponent(searchParam.replace(/\+/g, " "));
+    }
+    if (!entry.query && tabs[0]) {
+      entry.query = (tabs[0].title || "").replace(" - Google Maps", "").trim();
+    }
+
+    historyEntries.unshift(entry);
+    // Keep last 50 entries
+    if (historyEntries.length > 50) historyEntries = historyEntries.slice(0, 50);
+    localStorage.setItem("extractionHistory", JSON.stringify(historyEntries));
+    renderHistory();
+  });
+}
+
+// ── Listen for progress messages ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "progress") {
     setStatus(message.status);
@@ -82,8 +164,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       updateResultCount(message.total || 0);
     }
 
-    if (message.status === "done") {
-      setExtracting(false);
+    if (message.status === "optimize-done") {
+      setBusy(false);
       updateResultCount(message.count || 0);
       progressBar.classList.add("done");
       setProgress(message.count, message.count);
@@ -91,31 +173,76 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (response && response.data) {
           extractedData = response.data;
           downloadBtn.disabled = extractedData.length === 0;
+          onDataReceived();
+          saveToHistory(extractedData, "optimize");
+        }
+      });
+    }
+
+    if (message.status === "done") {
+      setBusy(false);
+      updateResultCount(message.count || 0);
+      progressBar.classList.add("done");
+      setProgress(message.count, message.count);
+      chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
+        if (response && response.data) {
+          extractedData = response.data;
+          downloadBtn.disabled = extractedData.length === 0;
+          onDataReceived();
+          saveToHistory(extractedData, "extraction");
         }
       });
     }
 
     if (message.status === "stopped") {
-      setExtracting(false);
-      // Fetch any partial data collected so far
+      setBusy(false);
       chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
         if (response && response.data && response.data.length > 0) {
           extractedData = response.data;
           updateResultCount(extractedData.length);
           downloadBtn.disabled = false;
+          onDataReceived();
         }
       });
     }
 
     if (message.status === "error") {
-      setExtracting(false);
+      setBusy(false);
     }
   }
 });
 
+// ── Menu tab actions ──
+optimizeBtn.addEventListener("click", () => {
+  setStatus("scrolling");
+  setBusy(true);
+  progressBar.style.width = "0%";
+  progressBar.classList.remove("done");
+  progressSection.classList.remove("visible");
+  downloadBtn.disabled = true;
+  extractedData = [];
+  updateResultCount(0);
+  errorMsg.classList.remove("visible");
+
+  chrome.runtime.sendMessage({ type: "clear-data" });
+  chrome.runtime.sendMessage({ type: "optimize-fetch" }, (response) => {
+    if (chrome.runtime.lastError) {
+      showError("Cannot connect. Make sure you're on Google Maps.");
+      setStatus("error");
+      setBusy(false);
+      return;
+    }
+    if (response && response.error) {
+      showError(response.error);
+      setStatus("error");
+      setBusy(false);
+    }
+  });
+});
+
 startBtn.addEventListener("click", () => {
   setStatus("scrolling");
-  setExtracting(true);
+  setBusy(true);
   progressBar.style.width = "0%";
   progressBar.classList.remove("done");
   progressSection.classList.remove("visible");
@@ -129,13 +256,13 @@ startBtn.addEventListener("click", () => {
     if (chrome.runtime.lastError) {
       showError("Cannot connect. Make sure you're on Google Maps.");
       setStatus("error");
-      setExtracting(false);
+      setBusy(false);
       return;
     }
     if (response && response.error) {
       showError(response.error);
       setStatus("error");
-      setExtracting(false);
+      setBusy(false);
     }
   });
 });
@@ -143,23 +270,18 @@ startBtn.addEventListener("click", () => {
 stopBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "stop-extraction" });
   setStatus("stopped");
-  setExtracting(false);
+  setBusy(false);
 });
 
 downloadBtn.addEventListener("click", () => {
+  downloadCSV();
+});
+
+// ── CSV download (shared) ──
+function downloadCSV() {
   if (extractedData.length === 0) return;
 
-  const headers = [
-    "Name",
-    "Address",
-    "Phone",
-    "Website",
-    "Rating",
-    "Reviews",
-    "Category",
-    "Hours",
-  ];
-
+  const headers = ["Name", "Address", "Phone", "Website", "Rating", "Reviews", "Category", "Hours"];
   const csvRows = [headers.join(",")];
 
   for (const item of extractedData) {
@@ -190,9 +312,117 @@ downloadBtn.addEventListener("click", () => {
   a.download = "google_maps_data_" + Date.now() + ".csv";
   a.click();
   URL.revokeObjectURL(url);
+}
+
+// ── Data tab ──
+dataDownloadBtn.addEventListener("click", () => {
+  downloadCSV();
 });
 
-// Check if there's existing extracted data on panel open
+dataClearBtn.addEventListener("click", () => {
+  extractedData = [];
+  chrome.runtime.sendMessage({ type: "clear-data" });
+  refreshDataTab();
+  downloadBtn.disabled = true;
+  dataDownloadBtn.disabled = true;
+  dataClearBtn.disabled = true;
+  updateResultCount(0);
+  setStatus("idle");
+  progressSection.classList.remove("visible");
+  progressBar.style.width = "0%";
+  progressBar.classList.remove("done");
+});
+
+function refreshDataTab() {
+  dataCount.textContent = extractedData.length;
+  dataDownloadBtn.disabled = extractedData.length === 0;
+  dataClearBtn.disabled = extractedData.length === 0;
+
+  if (extractedData.length === 0) {
+    dataEmpty.style.display = "";
+    dataTableWrap.style.display = "none";
+    return;
+  }
+
+  dataEmpty.style.display = "none";
+  dataTableWrap.style.display = "";
+
+  dataBody.innerHTML = "";
+  extractedData.forEach((item, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML =
+      "<td>" + (i + 1) + "</td>" +
+      "<td title=\"" + escHTML(item.name) + "\">" + escHTML(item.name) + "</td>" +
+      "<td>" + escHTML(item.rating || "\u2014") + "</td>" +
+      "<td>" + escHTML(item.phone || "\u2014") + "</td>";
+    dataBody.appendChild(tr);
+  });
+}
+
+function escHTML(str) {
+  const d = document.createElement("div");
+  d.textContent = str || "";
+  return d.innerHTML;
+}
+
+// ── History tab ──
+function renderHistory() {
+  if (historyEntries.length === 0) {
+    historyEmpty.style.display = "";
+    historyList.innerHTML = "";
+    return;
+  }
+
+  historyEmpty.style.display = "none";
+  historyList.innerHTML = "";
+
+  for (const entry of historyEntries) {
+    const date = new Date(entry.date);
+    const timeStr = date.toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    }) + " at " + date.toLocaleTimeString(undefined, {
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+
+    const div = document.createElement("div");
+    div.className = "history-item";
+    div.innerHTML =
+      '<div class="history-icon">' +
+        '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+          '<path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>' +
+          '<circle cx="12" cy="10" r="3"/>' +
+        '</svg>' +
+      '</div>' +
+      '<div class="history-info">' +
+        '<div class="history-query">' + escHTML(entry.query || "Google Maps extraction") + '</div>' +
+        '<div class="history-meta">' + escHTML(entry.count + " listings \u00B7 " + timeStr) + '</div>' +
+      '</div>' +
+      '<div class="history-actions">' +
+        '<button class="history-action-btn" data-id="' + entry.id + '" title="Remove">' +
+          '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+            '<line x1="18" y1="6" x2="6" y2="18"/>' +
+            '<line x1="6" y1="6" x2="18" y2="18"/>' +
+          '</svg>' +
+        '</button>' +
+      '</div>';
+
+    historyList.appendChild(div);
+  }
+
+  // Bind remove buttons
+  historyList.querySelectorAll(".history-action-btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const id = parseInt(btn.dataset.id);
+      historyEntries = historyEntries.filter((e) => e.id !== id);
+      localStorage.setItem("extractionHistory", JSON.stringify(historyEntries));
+      renderHistory();
+    });
+  });
+}
+
+// ── Init ──
 chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
   if (response && response.data && response.data.length > 0) {
     extractedData = response.data;
@@ -201,13 +431,12 @@ chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
     setStatus("done");
     progressBar.classList.add("done");
     setProgress(extractedData.length, extractedData.length);
+    onDataReceived();
   } else {
-    // No extracted data yet — check how many listings are on the page
     fetchListingCount();
   }
 });
 
-// Ask the content script for the current listing count on the page
 function fetchListingCount() {
   chrome.runtime.sendMessage({ type: "get-listing-count" }, (response) => {
     if (chrome.runtime.lastError) return;
@@ -217,9 +446,11 @@ function fetchListingCount() {
   });
 }
 
-// Periodically re-check listing count while idle (catches new searches)
-let countInterval = setInterval(() => {
+setInterval(() => {
   if (extractedData.length === 0 && !startBtn.disabled) {
     fetchListingCount();
   }
 }, 3000);
+
+// Render history on load
+renderHistory();

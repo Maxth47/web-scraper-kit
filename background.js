@@ -345,6 +345,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // Optimize fetch: scroll + extract only (no click-through enrichment)
+  if (message.type === "optimize-fetch") {
+    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+      const tab = tabs[0];
+      if (!tab || !tab.url || !tab.url.includes("google.com/maps")) {
+        sendResponse({ error: "Please navigate to Google Maps first." });
+        return;
+      }
+
+      sendResponse({ success: true });
+      shouldStopScroll = false;
+
+      try {
+        const result = await performScrollAndExtract(tab.id);
+
+        if (result.error) {
+          chrome.runtime
+            .sendMessage({ type: "progress", status: "error", count: 0, total: 0 })
+            .catch(() => {});
+          return;
+        }
+
+        extractedData = result.data || [];
+
+        if (shouldStopScroll) {
+          chrome.runtime
+            .sendMessage({
+              type: "progress",
+              status: "stopped",
+              count: extractedData.length,
+              total: extractedData.length,
+            })
+            .catch(() => {});
+        } else {
+          chrome.runtime
+            .sendMessage({
+              type: "progress",
+              status: "optimize-done",
+              count: extractedData.length,
+              total: extractedData.length,
+            })
+            .catch(() => {});
+        }
+      } catch (e) {
+        console.error("Optimize fetch failed:", e);
+        chrome.runtime
+          .sendMessage({ type: "progress", status: "error", count: 0, total: 0 })
+          .catch(() => {});
+      }
+    });
+    return true;
+  }
+
   // Main extraction flow: scroll + extract in one pass
   if (message.type === "start-extraction") {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {

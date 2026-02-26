@@ -10,141 +10,253 @@
   <!-- Top Bar -->
   <div class="topbar">
     <div class="topbar-left">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#a78bfa" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-        <circle cx="12" cy="10" r="3"/>
-      </svg>
+      <img src="images/logo.png" alt="Logo" class="topbar-logo">
       <span class="topbar-title">Maps Data Extractor</span>
     </div>
   </div>
 
-  <div class="panel-body">
-    <!-- Header Card -->
-    <div class="header-card">
-      <div class="header-row">
-        <div class="header-icon">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/>
-            <circle cx="12" cy="10" r="3"/>
-          </svg>
-        </div>
-        <div>
-          <h1>Maps Data Extractor</h1>
-          <p class="header-sub">Extract business data from Google Maps</p>
-        </div>
-      </div>
-    </div>
-
-    <!-- Status Section -->
-    <div class="section-header">
+  <!-- Tab Bar -->
+  <div class="tab-bar">
+    <button class="tab active" data-tab="menu">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        <line x1="3" y1="12" x2="21" y2="12"/>
+        <line x1="3" y1="6" x2="21" y2="6"/>
+        <line x1="3" y1="18" x2="21" y2="18"/>
       </svg>
-      Status
-    </div>
-
-    <div class="card" id="statusCard">
-      <div class="status-row">
-        <div class="status-indicator" id="statusDot"></div>
-        <span id="status" class="status-text">Ready to extract</span>
-      </div>
-      <div class="progress-section" id="progressSection">
-        <div class="progress-bar-track">
-          <div class="progress-bar-fill" id="progressBar"></div>
-        </div>
-        <div class="progress-meta">
-          <span id="progressText" class="progress-count">0 of 0</span>
-          <span id="progressPct" class="progress-pct"></span>
-        </div>
-      </div>
-    </div>
-
-    <!-- Stats -->
-    <div class="stats-row">
-      <div class="stat-card">
-        <div class="stat-value" id="resultCount">0</div>
-        <div class="stat-label">Listings Found</div>
-      </div>
-      <div class="stat-card">
-        <div class="stat-value" id="fieldCount">8</div>
-        <div class="stat-label">Data Fields</div>
-      </div>
-    </div>
-
-    <!-- Actions -->
-    <div class="section-header">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
-      </svg>
-      Actions
-    </div>
-
-    <div class="actions-grid">
-      <button id="startBtn" class="action-card">
-        <div class="action-icon action-icon-start">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <polygon points="5 3 19 12 5 21 5 3"/>
-          </svg>
-        </div>
-        <div class="action-label">START EXTRACTION</div>
-        <div class="action-desc">Auto-scroll and extract all listings</div>
-        <div class="action-divider"></div>
-      </button>
-
-      <button id="stopBtn" class="action-card" disabled>
-        <div class="action-icon action-icon-stop">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="6" y="6" width="12" height="12" rx="1"/>
-          </svg>
-        </div>
-        <div class="action-label">STOP</div>
-        <div class="action-desc">Cancel the current extraction</div>
-        <div class="action-divider"></div>
-      </button>
-
-      <button id="downloadBtn" class="action-card" disabled>
-        <div class="action-icon action-icon-download">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
-            <polyline points="7 10 12 15 17 10"/>
-            <line x1="12" y1="15" x2="12" y2="3"/>
-          </svg>
-        </div>
-        <div class="action-label">DOWNLOAD CSV</div>
-        <div class="action-desc">Export extracted data as spreadsheet</div>
-        <div class="action-divider"></div>
-      </button>
-    </div>
-
-    <!-- Data Fields Info -->
-    <div class="section-header">
+      Menu
+    </button>
+    <button class="tab" data-tab="data">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
         <line x1="3" y1="9" x2="21" y2="9"/>
         <line x1="9" y1="21" x2="9" y2="9"/>
       </svg>
-      Extracted Fields
-    </div>
-
-    <div class="fields-grid" id="fieldsGrid">
-      <span class="field-tag">Name</span>
-      <span class="field-tag">Address</span>
-      <span class="field-tag">Phone</span>
-      <span class="field-tag">Website</span>
-      <span class="field-tag">Rating</span>
-      <span class="field-tag">Reviews</span>
-      <span class="field-tag">Category</span>
-      <span class="field-tag">Hours</span>
-    </div>
-
-    <!-- Error Toast -->
-    <div id="errorMsg" class="toast-error">
+      Data
+    </button>
+    <button class="tab" data-tab="history">
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
         <circle cx="12" cy="12" r="10"/>
-        <line x1="15" y1="9" x2="9" y2="15"/>
-        <line x1="9" y1="9" x2="15" y2="15"/>
+        <polyline points="12 6 12 12 16 14"/>
       </svg>
-      <span id="errorText"></span>
+      History
+    </button>
+  </div>
+
+  <!-- ═══════════ TAB: Menu ═══════════ -->
+  <div class="tab-content active" id="tab-menu">
+    <div class="panel-body">
+      <!-- Header Card -->
+      <div class="header-card">
+        <div class="header-row">
+          <div class="header-icon">
+            <img src="images/logo.png" alt="Logo" class="header-logo">
+          </div>
+          <div>
+            <h1>Maps Data Extractor</h1>
+            <p class="header-sub">Extract business data from Google Maps</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- Status Section -->
+      <div class="section-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+        </svg>
+        Status
+      </div>
+
+      <div class="card" id="statusCard">
+        <div class="status-row">
+          <div class="status-indicator" id="statusDot"></div>
+          <span id="status" class="status-text">Ready to extract</span>
+        </div>
+        <div class="progress-section" id="progressSection">
+          <div class="progress-bar-track">
+            <div class="progress-bar-fill" id="progressBar"></div>
+          </div>
+          <div class="progress-meta">
+            <span id="progressText" class="progress-count">0 of 0</span>
+            <span id="progressPct" class="progress-pct"></span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Stats -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-value" id="resultCount">0</div>
+          <div class="stat-label">Listings Found</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-value" id="fieldCount">8</div>
+          <div class="stat-label">Data Fields</div>
+        </div>
+      </div>
+
+      <!-- Actions -->
+      <div class="section-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+        Actions
+      </div>
+
+      <div class="actions-grid">
+        <button id="optimizeBtn" class="action-card">
+          <div class="action-icon action-icon-optimize">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="23 4 23 10 17 10"/>
+              <polyline points="1 20 1 14 7 14"/>
+              <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10"/>
+              <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14"/>
+            </svg>
+          </div>
+          <div>
+            <div class="action-label">OPTIMIZE FETCHING</div>
+            <div class="action-desc">Scroll to load all listings first</div>
+          </div>
+          <div class="action-divider"></div>
+        </button>
+
+        <button id="startBtn" class="action-card">
+          <div class="action-icon action-icon-start">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+          </div>
+          <div>
+            <div class="action-label">START EXTRACTION</div>
+            <div class="action-desc">Scroll, extract &amp; enrich all details</div>
+          </div>
+          <div class="action-divider"></div>
+        </button>
+
+        <button id="stopBtn" class="action-card" disabled>
+          <div class="action-icon action-icon-stop">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="6" y="6" width="12" height="12" rx="1"/>
+            </svg>
+          </div>
+          <div>
+            <div class="action-label">STOP</div>
+            <div class="action-desc">Cancel the current operation</div>
+          </div>
+          <div class="action-divider"></div>
+        </button>
+
+        <button id="downloadBtn" class="action-card" disabled>
+          <div class="action-icon action-icon-download">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </div>
+          <div>
+            <div class="action-label">DOWNLOAD CSV</div>
+            <div class="action-desc">Export extracted data as spreadsheet</div>
+          </div>
+          <div class="action-divider"></div>
+        </button>
+      </div>
+
+      <!-- Data Fields Info -->
+      <div class="section-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <line x1="3" y1="9" x2="21" y2="9"/>
+          <line x1="9" y1="21" x2="9" y2="9"/>
+        </svg>
+        Extracted Fields
+      </div>
+
+      <div class="fields-grid" id="fieldsGrid">
+        <span class="field-tag">Name</span>
+        <span class="field-tag">Address</span>
+        <span class="field-tag">Phone</span>
+        <span class="field-tag">Website</span>
+        <span class="field-tag">Rating</span>
+        <span class="field-tag">Reviews</span>
+        <span class="field-tag">Category</span>
+        <span class="field-tag">Hours</span>
+      </div>
+
+      <!-- Error Toast -->
+      <div id="errorMsg" class="toast-error">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <line x1="15" y1="9" x2="9" y2="15"/>
+          <line x1="9" y1="9" x2="15" y2="15"/>
+        </svg>
+        <span id="errorText"></span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ TAB: Data ═══════════ -->
+  <div class="tab-content" id="tab-data">
+    <div class="panel-body">
+      <div class="data-toolbar">
+        <span class="data-toolbar-count"><span id="dataCount">0</span> records</span>
+        <div class="data-toolbar-actions">
+          <button class="data-toolbar-btn" id="dataDownloadBtn" disabled title="Download CSV">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+              <polyline points="7 10 12 15 17 10"/>
+              <line x1="12" y1="15" x2="12" y2="3"/>
+            </svg>
+          </button>
+          <button class="data-toolbar-btn" id="dataClearBtn" disabled title="Clear data">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="3 6 5 6 21 6"/>
+              <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+              <path d="M10 11v6"/>
+              <path d="M14 11v6"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="data-empty" id="dataEmpty">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2e3148" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="2" ry="2"/>
+          <line x1="3" y1="9" x2="21" y2="9"/>
+          <line x1="9" y1="21" x2="9" y2="9"/>
+        </svg>
+        <p>No data yet</p>
+        <span>Run an extraction from the Menu tab</span>
+      </div>
+
+      <div class="data-table-wrap" id="dataTableWrap" style="display:none">
+        <table class="data-table" id="dataTable">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Name</th>
+              <th>Rating</th>
+              <th>Phone</th>
+            </tr>
+          </thead>
+          <tbody id="dataBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ TAB: History ═══════════ -->
+  <div class="tab-content" id="tab-history">
+    <div class="panel-body">
+      <div class="history-empty" id="historyEmpty">
+        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="#2e3148" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <polyline points="12 6 12 12 16 14"/>
+        </svg>
+        <p>No history yet</p>
+        <span>Past extractions will appear here</span>
+      </div>
+
+      <div id="historyList" class="history-list"></div>
     </div>
   </div>
 
