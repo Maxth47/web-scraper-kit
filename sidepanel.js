@@ -95,7 +95,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       });
     }
 
-    if (message.status === "error" || message.status === "stopped") {
+    if (message.status === "stopped") {
+      setExtracting(false);
+      // Fetch any partial data collected so far
+      chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
+        if (response && response.data && response.data.length > 0) {
+          extractedData = response.data;
+          updateResultCount(extractedData.length);
+          downloadBtn.disabled = false;
+        }
+      });
+    }
+
+    if (message.status === "error") {
       setExtracting(false);
     }
   }

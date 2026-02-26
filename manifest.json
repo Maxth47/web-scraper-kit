@@ -3,7 +3,7 @@
   "name": "Google Maps Data Extractor",
   "version": "1.0.0",
   "description": "Extract business listing data from Google Maps search results and export as CSV.",
-  "permissions": ["activeTab", "scripting", "sidePanel"],
+  "permissions": ["activeTab", "scripting", "sidePanel", "debugger"],
   "action": {
     "default_icon": {
       "16": "icons/icon16.png",
