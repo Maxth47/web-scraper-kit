@@ -10,15 +10,14 @@ themeToggle.addEventListener("click", () => {
 });
 
 // ── DOM refs ──
-const statusEl = document.getElementById("status");
-const statusDot = document.getElementById("statusDot");
-const statusCard = document.getElementById("statusCard");
-const progressSection = document.getElementById("progressSection");
-const progressBar = document.getElementById("progressBar");
-const progressText = document.getElementById("progressText");
-const progressPct = document.getElementById("progressPct");
-const resultCount = document.getElementById("resultCount");
-const fieldCount = document.getElementById("fieldCount");
+const fetchResult = document.getElementById("fetchResult");
+const fetchProgressBar = document.getElementById("fetchProgressBar");
+const fetchCount = document.getElementById("fetchCount");
+const fetchStats = document.getElementById("fetchStats");
+const extractResult = document.getElementById("extractResult");
+const extractProgressBar = document.getElementById("extractProgressBar");
+const extractCount = document.getElementById("extractCount");
+const extractStats = document.getElementById("extractStats");
 const optimizeBtn = document.getElementById("optimizeBtn");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
@@ -70,41 +69,58 @@ tabs.forEach((tab) => {
   });
 });
 
-// ── Status ──
-const STATUS_LABELS = {
-  idle: "Ready to extract",
-  scrolling: "Loading all results...",
-  "optimize-done": "Fetching complete \u2014 ready to extract",
-  extracting: "Extracting business data...",
-  "extracting-details": "Enriching with detail data...",
-  done: "Extraction complete",
-  error: "Not on a Google Maps search page",
-  stopped: "Operation stopped",
-};
-
-function setStatus(status) {
-  statusEl.textContent = STATUS_LABELS[status] || status;
-  statusDot.className = "status-indicator " + status;
-
-  statusCard.className = "card";
-  if (status === "scrolling" || status === "extracting" || status === "extracting-details") {
-    statusCard.classList.add("active");
-    statusDot.className = "status-indicator extracting";
-  } else if (status === "done" || status === "optimize-done") {
-    statusCard.classList.add("done");
-    statusDot.className = "status-indicator done";
-  } else if (status === "error" || status === "stopped") {
-    statusCard.classList.add("error");
+// ── Inline progress helpers ──
+function setActionProgress(barEl, count, total) {
+  if (total > 0) {
+    const pct = Math.round((count / total) * 100);
+    barEl.style.width = pct + "%";
   }
 }
 
-function setProgress(count, total) {
-  if (total > 0) {
-    progressSection.classList.add("visible");
-    const pct = Math.round((count / total) * 100);
-    progressBar.style.width = pct + "%";
-    progressText.textContent = count + " of " + total;
-    progressPct.textContent = pct + "%";
+function showResult(resultEl) {
+  resultEl.classList.add("visible");
+}
+
+function hideResult(resultEl) {
+  resultEl.classList.remove("visible");
+}
+
+function resetResult(resultEl, barEl) {
+  barEl.style.width = "0%";
+  barEl.classList.remove("done");
+  hideResult(resultEl);
+}
+
+// Step progress: mark number done, line green, next step pending ring
+const stepEls = document.querySelectorAll(".step");
+
+function markStepDone(stepIndex) {
+  const step = stepEls[stepIndex - 1];
+  if (!step) return;
+  const num = step.querySelector(".step-number");
+  const line = step.querySelector(".step-line");
+  if (num) { num.classList.add("done"); num.classList.remove("pending"); }
+  if (line) line.classList.add("done");
+  // Next step gets pending ring
+  const nextStep = stepEls[stepIndex];
+  if (nextStep) {
+    const nextNum = nextStep.querySelector(".step-number");
+    if (nextNum && !nextNum.classList.contains("done")) nextNum.classList.add("pending");
+  }
+}
+
+function resetStepDone(stepIndex) {
+  const step = stepEls[stepIndex - 1];
+  if (!step) return;
+  const num = step.querySelector(".step-number");
+  const line = step.querySelector(".step-line");
+  if (num) { num.classList.remove("done"); num.classList.remove("pending"); }
+  if (line) line.classList.remove("done");
+  // Also remove pending from next step
+  const nextStep = stepEls[stepIndex];
+  if (nextStep) {
+    const nextNum = nextStep.querySelector(".step-number");
+    if (nextNum) nextNum.classList.remove("pending");
   }
 }
 
@@ -120,10 +136,16 @@ function setBusy(active) {
   optimizeBtn.disabled = active;
   startBtn.disabled = active;
   stopBtn.disabled = !active;
+  if (active) {
+    stopBtn.classList.add("visible");
+  } else {
+    stopBtn.classList.remove("visible");
+  }
 }
 
 function updateResultCount(count) {
-  resultCount.textContent = count;
+  fetchCount.textContent = count;
+  extractCount.textContent = count;
   exportCount.textContent = count;
 }
 
@@ -175,23 +197,26 @@ function saveToHistory(data, status) {
 // ── Listen for progress messages ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "progress") {
-    setStatus(message.status);
 
     if (message.status === "scrolling") {
-      updateResultCount(message.count || 0);
-      progressSection.classList.remove("visible");
+      showResult(fetchResult);
+      fetchCount.textContent = message.count || 0;
+      // Indeterminate — pulse the bar to ~60%
+      fetchProgressBar.style.width = "60%";
     }
 
     if (message.status === "extracting" || message.status === "extracting-details") {
-      setProgress(message.count, message.total);
+      showResult(extractResult);
+      setActionProgress(extractProgressBar, message.count, message.total);
       updateResultCount(message.total || 0);
     }
 
     if (message.status === "optimize-done") {
+      markStepDone(1);
       setBusy(false);
       updateResultCount(message.count || 0);
-      progressBar.classList.add("done");
-      setProgress(message.count, message.count);
+      fetchProgressBar.classList.add("done");
+      fetchProgressBar.style.width = "100%";
       chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
         if (response && response.data) {
           extractedData = response.data;
@@ -203,10 +228,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.status === "done") {
+      markStepDone(2);
       setBusy(false);
       updateResultCount(message.count || 0);
-      progressBar.classList.add("done");
-      setProgress(message.count, message.count);
+      extractProgressBar.classList.add("done");
+      extractProgressBar.style.width = "100%";
       chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
         if (response && response.data) {
           extractedData = response.data;
@@ -219,6 +245,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.status === "stopped") {
       setBusy(false);
+      // Hide progress bars but keep any counts shown
+      fetchProgressBar.style.width = "0%";
+      extractProgressBar.style.width = "0%";
       chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
         if (response && response.data && response.data.length > 0) {
           extractedData = response.data;
@@ -231,17 +260,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     if (message.status === "error") {
       setBusy(false);
+      fetchProgressBar.style.width = "0%";
+      extractProgressBar.style.width = "0%";
     }
   }
 });
 
 // ── Menu tab actions ──
 optimizeBtn.addEventListener("click", () => {
-  setStatus("scrolling");
+
   setBusy(true);
-  progressBar.style.width = "0%";
-  progressBar.classList.remove("done");
-  progressSection.classList.remove("visible");
+  resetStepDone(1);
+  resetStepDone(2);
+  resetResult(fetchResult, fetchProgressBar);
+  resetResult(extractResult, extractProgressBar);
+  showResult(fetchResult);
   setExportEnabled(false);
   extractedData = [];
   updateResultCount(0);
@@ -251,24 +284,23 @@ optimizeBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "optimize-fetch" }, (response) => {
     if (chrome.runtime.lastError) {
       showError("Cannot connect. Make sure you're on Google Maps.");
-      setStatus("error");
+      hideResult(fetchResult);
       setBusy(false);
       return;
     }
     if (response && response.error) {
       showError(response.error);
-      setStatus("error");
+      hideResult(fetchResult);
       setBusy(false);
     }
   });
 });
 
 startBtn.addEventListener("click", () => {
-  setStatus("scrolling");
   setBusy(true);
-  progressBar.style.width = "0%";
-  progressBar.classList.remove("done");
-  progressSection.classList.remove("visible");
+  resetStepDone(2);
+  resetResult(extractResult, extractProgressBar);
+  showResult(extractResult);
   setExportEnabled(false);
   extractedData = [];
   updateResultCount(0);
@@ -278,13 +310,13 @@ startBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "start-extraction" }, (response) => {
     if (chrome.runtime.lastError) {
       showError("Cannot connect. Make sure you're on Google Maps.");
-      setStatus("error");
+      hideResult(extractResult);
       setBusy(false);
       return;
     }
     if (response && response.error) {
       showError(response.error);
-      setStatus("error");
+      hideResult(extractResult);
       setBusy(false);
     }
   });
@@ -292,7 +324,6 @@ startBtn.addEventListener("click", () => {
 
 stopBtn.addEventListener("click", () => {
   chrome.runtime.sendMessage({ type: "stop-extraction" });
-  setStatus("stopped");
   setBusy(false);
 });
 
@@ -410,16 +441,16 @@ dataDownloadBtn.addEventListener("click", () => {
 
 dataClearBtn.addEventListener("click", () => {
   extractedData = [];
+  resetStepDone(1);
+  resetStepDone(2);
   chrome.runtime.sendMessage({ type: "clear-data" });
   refreshDataTab();
   setExportEnabled(false);
   dataDownloadBtn.disabled = true;
   dataClearBtn.disabled = true;
   updateResultCount(0);
-  setStatus("idle");
-  progressSection.classList.remove("visible");
-  progressBar.style.width = "0%";
-  progressBar.classList.remove("done");
+  resetResult(fetchResult, fetchProgressBar);
+  resetResult(extractResult, extractProgressBar);
 });
 
 function refreshDataTab() {
@@ -517,9 +548,15 @@ chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
     extractedData = response.data;
     updateResultCount(extractedData.length);
     setExportEnabled(true);
-    setStatus("done");
-    progressBar.classList.add("done");
-    setProgress(extractedData.length, extractedData.length);
+    markStepDone(1);
+    markStepDone(2);
+    // Show completed state inline
+    showResult(fetchResult);
+    fetchProgressBar.classList.add("done");
+    fetchProgressBar.style.width = "100%";
+    showResult(extractResult);
+    extractProgressBar.classList.add("done");
+    extractProgressBar.style.width = "100%";
     onDataReceived();
   } else {
     fetchListingCount();

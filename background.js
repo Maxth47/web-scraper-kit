@@ -398,7 +398,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Main extraction flow: scroll + extract in one pass
+  // Main extraction flow: use fetched data if available, otherwise scroll first
   if (message.type === "start-extraction") {
     chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
       const tab = tabs[0];
@@ -411,53 +411,51 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       shouldStopScroll = false;
 
       try {
-        // Scroll and extract data in one pass
-        const result = await performScrollAndExtract(tab.id);
+        let dataToEnrich = extractedData;
 
-        if (result.error) {
-          chrome.runtime
-            .sendMessage({
-              type: "progress",
-              status: "error",
-              count: 0,
-              total: 0,
-            })
-            .catch(() => {});
-          return;
-        }
+        // If no fetched data, scroll first to collect listings
+        if (!dataToEnrich || dataToEnrich.length === 0) {
+          const result = await performScrollAndExtract(tab.id);
 
-        if (shouldStopScroll) {
-          chrome.runtime
-            .sendMessage({
-              type: "progress",
-              status: "stopped",
-              count: result.data?.length || 0,
-              total: result.data?.length || 0,
-            })
-            .catch(() => {});
-          if (result.data && result.data.length > 0) {
-            extractedData = result.data;
+          if (result.error) {
+            chrome.runtime
+              .sendMessage({ type: "progress", status: "error", count: 0, total: 0 })
+              .catch(() => {});
+            return;
           }
-          return;
+
+          if (shouldStopScroll) {
+            chrome.runtime
+              .sendMessage({
+                type: "progress",
+                status: "stopped",
+                count: result.data?.length || 0,
+                total: result.data?.length || 0,
+              })
+              .catch(() => {});
+            if (result.data && result.data.length > 0) {
+              extractedData = result.data;
+            }
+            return;
+          }
+
+          dataToEnrich = result.data || [];
+          extractedData = dataToEnrich;
         }
 
-        // Store results and tell content script to enrich with click-through
-        extractedData = result.data || [];
-
-        if (extractedData.length > 0) {
-          // Send data to content script for click-through enrichment
-          chrome.tabs.sendMessage(tab.id, {
-            type: "enrich-data",
-            data: extractedData,
-          });
+        if (dataToEnrich.length > 0) {
+          // Data is already extracted during scroll — report done
+          chrome.runtime
+            .sendMessage({
+              type: "progress",
+              status: "done",
+              count: dataToEnrich.length,
+              total: dataToEnrich.length,
+            })
+            .catch(() => {});
         } else {
           chrome.runtime
-            .sendMessage({
-              type: "progress",
-              status: "error",
-              count: 0,
-              total: 0,
-            })
+            .sendMessage({ type: "progress", status: "error", count: 0, total: 0 })
             .catch(() => {});
         }
       } catch (e) {
