@@ -3,22 +3,7 @@
   let shouldStop = false;
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    // Legacy: basic extraction (fallback if debugger scroll fails)
-    if (message.type === "start-extraction" || message.type === "extract-data") {
-      if (isExtracting) {
-        sendResponse({ error: "Extraction already in progress." });
-        return true;
-      }
-      shouldStop = false;
-      isExtracting = true;
-      sendResponse({ success: true });
-      runBasicExtraction();
-      return true;
-    }
-
-    // New: receive pre-extracted data from background, enrich with click-through
     if (message.type === "enrich-data") {
-      // Reset state — allow new enrichment even if previous got stuck
       shouldStop = false;
       isExtracting = true;
       sendResponse({ success: true });
@@ -52,12 +37,26 @@
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
 
-  // ── Enrich pre-extracted data with click-through for missing fields ──
+  function getResultsFeed() {
+    return (
+      document.querySelector('div[role="feed"]') ||
+      document.querySelector('div[aria-label*="Results"]')
+    );
+  }
+
+  function getScrollContainer() {
+    const feed = getResultsFeed();
+    if (!feed) return null;
+    return (
+      feed.closest('div[role="main"]')?.querySelector("div[tabindex='-1']") ||
+      feed.parentElement
+    );
+  }
+
+  // ── Enrich pre-extracted data with click-through ──
   async function runEnrichment(data) {
     try {
       const total = data.length;
-
-      // Build a lookup map for quick matching
       const dataByName = new Map();
       for (const item of data) {
         if (item.name) dataByName.set(item.name, item);
@@ -65,27 +64,30 @@
 
       sendProgress("extracting-details", 0, total);
 
-      // Get all listing links currently in the feed
-      // Google Maps virtualizes, so we need to process what's visible,
-      // then scroll to reveal more
-      const feed = document.querySelector('div[role="feed"]');
+      const feed = getResultsFeed();
       if (!feed) {
         console.warn("Enrichment: no feed found");
         finishEnrichment(data);
         return;
       }
 
+      const scrollContainer = getScrollContainer();
+
+      // Scroll to top
+      if (scrollContainer) {
+        scrollContainer.scrollTop = 0;
+      } else {
+        feed.scrollTop = 0;
+      }
+      await sleep(800);
+
       let processed = 0;
-      let scrollAttempts = 0;
-      const maxScrollAttempts = 100;
+      let scrollMisses = 0;
+      const maxScrollMisses = 30;
       const processedNames = new Set();
 
-      // Scroll to the top first
-      feed.scrollTop = 0;
-      await sleep(500);
-
-      while (scrollAttempts < maxScrollAttempts && !shouldStop) {
-        // Find all visible listing links
+      while (processedNames.size < dataByName.size && scrollMisses < maxScrollMisses && !shouldStop) {
+        // Get all currently visible listing links
         const links = document.querySelectorAll("a.hfpxzc");
         let foundNew = false;
 
@@ -95,9 +97,11 @@
           const label = link.getAttribute("aria-label") || "";
           if (!label || processedNames.has(label)) continue;
 
-          // Match to our data
           const item = dataByName.get(label);
-          if (!item) continue;
+          if (!item) {
+            processedNames.add(label); // skip unknown listings
+            continue;
+          }
 
           processedNames.add(label);
           foundNew = true;
@@ -106,14 +110,15 @@
           sendProgress("extracting-details", processed, total);
 
           try {
+            // Scroll the link into view and click it
             link.scrollIntoView({ block: "center", behavior: "instant" });
-            await sleep(200);
+            await sleep(300);
             link.click();
             await sleep(2000 + Math.random() * 500);
 
-            // Wait for detail panel
+            // Wait for detail panel to load
             let detailLoaded = false;
-            for (let r = 0; r < 5 && !detailLoaded; r++) {
+            for (let r = 0; r < 8 && !detailLoaded; r++) {
               detailLoaded = !!document.querySelector(
                 'button[data-item-id*="phone"], button[data-item-id*="address"], a[data-item-id*="authority"]'
               );
@@ -137,75 +142,41 @@
             }
 
             // Wait for feed to reappear
-            for (let r = 0; r < 8 && !document.querySelector('div[role="feed"]'); r++) {
+            for (let r = 0; r < 10 && !getResultsFeed(); r++) {
               await sleep(600);
             }
+            await sleep(300);
           } catch (e) {
             console.warn("Click-through failed for", label, e);
           }
+
+          // After going back, the DOM has changed — break out of inner for loop
+          // and re-query links in the next while iteration
+          break;
         }
+
+        if (shouldStop) break;
 
         // If we've processed all items, we're done
         if (processedNames.size >= dataByName.size) break;
 
-        // Scroll down to reveal more listings
+        // No new item found in visible links — scroll down
         if (!foundNew) {
-          scrollAttempts++;
-        } else {
-          scrollAttempts = 0;
-        }
-
-        feed.scrollTop += 300;
-        await sleep(400);
-
-        // Check for end of list
-        const feedText = feed.textContent || "";
-        if (feedText.includes("You've reached the end")) {
-          // One more pass to catch the last items
-          await sleep(300);
-          const finalLinks = document.querySelectorAll("a.hfpxzc");
-          for (const link of finalLinks) {
-            if (shouldStop) break;
-            const label = link.getAttribute("aria-label") || "";
-            if (!label || processedNames.has(label)) continue;
-            const item = dataByName.get(label);
-            if (!item) continue;
-
-            processedNames.add(label);
-            processed++;
-            sendProgress("extracting-details", processed, total);
-
-            try {
-              link.click();
-              await sleep(2000 + Math.random() * 500);
-
-              let detailLoaded = false;
-              for (let r = 0; r < 5 && !detailLoaded; r++) {
-                detailLoaded = !!document.querySelector(
-                  'button[data-item-id*="phone"], button[data-item-id*="address"], a[data-item-id*="authority"]'
-                );
-                if (!detailLoaded) await sleep(600);
-              }
-              if (detailLoaded) extractDetailFields(item);
-
-              const backBtn = document.querySelector(
-                'button[aria-label="Back"], button[jsaction*="back"]'
-              );
-              if (backBtn) {
-                backBtn.click();
-                await sleep(1500 + Math.random() * 500);
-              } else {
-                history.back();
-                await sleep(2000);
-              }
-              for (let r = 0; r < 8 && !document.querySelector('div[role="feed"]'); r++) {
-                await sleep(600);
-              }
-            } catch (e) {
-              console.warn("Click-through failed for", label, e);
-            }
+          scrollMisses++;
+          if (scrollContainer) {
+            scrollContainer.scrollTop += 400;
+          } else {
+            feed.scrollTop += 400;
           }
-          break;
+          await sleep(800);
+
+          // Check for end of list
+          const feedText = feed.textContent || "";
+          if (feedText.includes("You've reached the end") || feedText.includes("No more results")) {
+            break;
+          }
+        } else {
+          scrollMisses = 0;
         }
       }
 
@@ -261,96 +232,5 @@
   function finishEnrichment(data) {
     chrome.runtime.sendMessage({ type: "extraction-data", data });
     sendProgress(shouldStop ? "stopped" : "done", data.length, data.length);
-  }
-
-  // ── Fallback: basic extraction from currently visible items ──
-  async function runBasicExtraction() {
-    try {
-      const feed = document.querySelector('div[role="feed"]');
-      if (!feed) {
-        sendProgress("error", 0, 0);
-        isExtracting = false;
-        return;
-      }
-
-      const cards = feed.querySelectorAll(".Nv2PK");
-      if (cards.length === 0) {
-        sendProgress("error", 0, 0);
-        isExtracting = false;
-        return;
-      }
-
-      sendProgress("extracting", 0, cards.length);
-      const results = [];
-
-      for (let i = 0; i < cards.length; i++) {
-        if (shouldStop) break;
-        sendProgress("extracting", i + 1, cards.length);
-        const data = extractFromCard(cards[i]);
-        if (data.name) results.push(data);
-      }
-
-      chrome.runtime.sendMessage({
-        type: "extraction-data",
-        data: results,
-      });
-
-      sendProgress(
-        shouldStop ? "stopped" : "done",
-        results.length,
-        results.length
-      );
-    } catch (err) {
-      console.error("Extraction error:", err);
-      sendProgress("error", 0, 0);
-    } finally {
-      isExtracting = false;
-    }
-  }
-
-  function extractFromCard(item) {
-    const data = {
-      name: "",
-      address: "",
-      phone: "",
-      website: "",
-      rating: "",
-      reviewCount: "",
-      category: "",
-      hours: "",
-      priceLevel: "",
-    };
-
-    const nameEl =
-      item.querySelector(".fontHeadlineSmall") ||
-      item.querySelector('[class*="fontHead"]');
-    if (nameEl) {
-      data.name = nameEl.textContent?.trim() || "";
-    }
-    if (!data.name) {
-      const link =
-        item.querySelector("a.hfpxzc") ||
-        item.querySelector('a[href*="/maps/place/"]');
-      if (link) {
-        data.name = link.getAttribute("aria-label") || "";
-      }
-    }
-
-    const ratingImg = item.querySelector('span[role="img"]');
-    if (ratingImg) {
-      const ariaLabel = ratingImg.getAttribute("aria-label") || "";
-      const ratingMatch = ariaLabel.match(/([\d.]+)\s*star/i);
-      if (ratingMatch) data.rating = ratingMatch[1];
-      const reviewMatch = ariaLabel.match(/([\d,]+)\s*[Rr]eview/);
-      if (reviewMatch) data.reviewCount = reviewMatch[1].replace(/,/g, "");
-    }
-
-    if (!data.reviewCount) {
-      const allText = item.textContent || "";
-      const parenMatch = allText.match(/\(([\d,]+)\)/);
-      if (parenMatch) data.reviewCount = parenMatch[1].replace(/,/g, "");
-    }
-
-    return data;
   }
 })();

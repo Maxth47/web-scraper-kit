@@ -304,11 +304,8 @@ startBtn.addEventListener("click", () => {
   resetResult(extractResult, extractProgressBar);
   showResult(extractResult);
   setExportEnabled(false);
-  extractedData = [];
-  updateResultCount(0);
   errorMsg.classList.remove("visible");
 
-  chrome.runtime.sendMessage({ type: "clear-data" });
   chrome.runtime.sendMessage({ type: "start-extraction" }, (response) => {
     if (chrome.runtime.lastError) {
       showError("Cannot connect. Make sure you're on Google Maps.");

@@ -398,71 +398,32 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  // Main extraction flow: use fetched data if available, otherwise scroll first
+  // Main extraction: send fetched data to content script for click-through enrichment
   if (message.type === "start-extraction") {
-    chrome.tabs.query({ active: true, currentWindow: true }, async (tabs) => {
+    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       if (!tab || !tab.url || !tab.url.includes("google.com/maps")) {
         sendResponse({ error: "Please navigate to Google Maps first." });
         return;
       }
 
-      sendResponse({ success: true });
-      shouldStopScroll = false;
+      const dataToEnrich = extractedData && extractedData.length > 0
+        ? extractedData
+        : [];
 
-      try {
-        let dataToEnrich = extractedData;
-
-        // If no fetched data, scroll first to collect listings
-        if (!dataToEnrich || dataToEnrich.length === 0) {
-          const result = await performScrollAndExtract(tab.id);
-
-          if (result.error) {
-            chrome.runtime
-              .sendMessage({ type: "progress", status: "error", count: 0, total: 0 })
-              .catch(() => {});
-            return;
-          }
-
-          if (shouldStopScroll) {
-            chrome.runtime
-              .sendMessage({
-                type: "progress",
-                status: "stopped",
-                count: result.data?.length || 0,
-                total: result.data?.length || 0,
-              })
-              .catch(() => {});
-            if (result.data && result.data.length > 0) {
-              extractedData = result.data;
-            }
-            return;
-          }
-
-          dataToEnrich = result.data || [];
-          extractedData = dataToEnrich;
-        }
-
-        if (dataToEnrich.length > 0) {
-          // Data is already extracted during scroll — report done
-          chrome.runtime
-            .sendMessage({
-              type: "progress",
-              status: "done",
-              count: dataToEnrich.length,
-              total: dataToEnrich.length,
-            })
-            .catch(() => {});
-        } else {
-          chrome.runtime
-            .sendMessage({ type: "progress", status: "error", count: 0, total: 0 })
-            .catch(() => {});
-        }
-      } catch (e) {
-        console.error("Scroll+extract failed:", e);
-        // Fallback: try basic extraction via content script
-        chrome.tabs.sendMessage(tab.id, { type: "extract-data" });
+      if (dataToEnrich.length === 0) {
+        sendResponse({ error: "No fetched listings. Run Fetch Listings first." });
+        return;
       }
+
+      // Send data to content script for enrichment
+      chrome.tabs.sendMessage(tab.id, { type: "enrich-data", data: dataToEnrich }, (response) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ error: "Cannot connect to page. Refresh Google Maps and try again." });
+          return;
+        }
+        sendResponse(response || { success: true });
+      });
     });
     return true;
   }
