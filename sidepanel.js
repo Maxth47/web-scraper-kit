@@ -1,3 +1,14 @@
+// ── Theme toggle ──
+const themeToggle = document.getElementById("themeToggle");
+const savedTheme = localStorage.getItem("theme");
+if (savedTheme === "dark") document.body.classList.add("dark");
+
+themeToggle.addEventListener("click", () => {
+  document.body.classList.toggle("dark");
+  const isDark = document.body.classList.contains("dark");
+  localStorage.setItem("theme", isDark ? "dark" : "light");
+});
+
 // ── DOM refs ──
 const statusEl = document.getElementById("status");
 const statusDot = document.getElementById("statusDot");
@@ -12,6 +23,10 @@ const optimizeBtn = document.getElementById("optimizeBtn");
 const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 const downloadBtn = document.getElementById("downloadBtn");
+const jsonBtn = document.getElementById("jsonBtn");
+const excelBtn = document.getElementById("excelBtn");
+const copyBtn = document.getElementById("copyBtn");
+const exportCount = document.getElementById("exportCount");
 const errorMsg = document.getElementById("errorMsg");
 const errorText = document.getElementById("errorText");
 
@@ -109,6 +124,14 @@ function setBusy(active) {
 
 function updateResultCount(count) {
   resultCount.textContent = count;
+  exportCount.textContent = count;
+}
+
+function setExportEnabled(enabled) {
+  downloadBtn.disabled = !enabled;
+  jsonBtn.disabled = !enabled;
+  excelBtn.disabled = !enabled;
+  copyBtn.disabled = !enabled;
 }
 
 // ── Data received → update data tab + save history ──
@@ -172,7 +195,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
         if (response && response.data) {
           extractedData = response.data;
-          downloadBtn.disabled = extractedData.length === 0;
+          setExportEnabled(extractedData.length > 0);
           onDataReceived();
           saveToHistory(extractedData, "optimize");
         }
@@ -187,7 +210,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
         if (response && response.data) {
           extractedData = response.data;
-          downloadBtn.disabled = extractedData.length === 0;
+          setExportEnabled(extractedData.length > 0);
           onDataReceived();
           saveToHistory(extractedData, "extraction");
         }
@@ -200,7 +223,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         if (response && response.data && response.data.length > 0) {
           extractedData = response.data;
           updateResultCount(extractedData.length);
-          downloadBtn.disabled = false;
+          setExportEnabled(true);
           onDataReceived();
         }
       });
@@ -219,7 +242,7 @@ optimizeBtn.addEventListener("click", () => {
   progressBar.style.width = "0%";
   progressBar.classList.remove("done");
   progressSection.classList.remove("visible");
-  downloadBtn.disabled = true;
+  setExportEnabled(false);
   extractedData = [];
   updateResultCount(0);
   errorMsg.classList.remove("visible");
@@ -246,7 +269,7 @@ startBtn.addEventListener("click", () => {
   progressBar.style.width = "0%";
   progressBar.classList.remove("done");
   progressSection.classList.remove("visible");
-  downloadBtn.disabled = true;
+  setExportEnabled(false);
   extractedData = [];
   updateResultCount(0);
   errorMsg.classList.remove("visible");
@@ -314,6 +337,72 @@ function downloadCSV() {
   URL.revokeObjectURL(url);
 }
 
+// ── JSON download ──
+function downloadJSON() {
+  if (extractedData.length === 0) return;
+
+  const jsonContent = JSON.stringify(extractedData, null, 2);
+  const blob = new Blob([jsonContent], { type: "application/json;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "google_maps_data_" + Date.now() + ".json";
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── Excel download ──
+function downloadExcel() {
+  if (extractedData.length === 0) return;
+
+  const headers = ["Name", "Address", "Phone", "Website", "Rating", "Reviews", "Category", "Hours"];
+  const rows = extractedData.map((item) => [
+    item.name, item.address, item.phone, item.website,
+    item.rating, item.reviewCount, item.category, item.hours,
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Data");
+  XLSX.writeFile(wb, "google_maps_data_" + Date.now() + ".xlsx");
+}
+
+// ── Copy to clipboard ──
+function copyToClipboard() {
+  if (extractedData.length === 0) return;
+
+  const headers = ["Name", "Address", "Phone", "Website", "Rating", "Reviews", "Category", "Hours"];
+  const rows = extractedData.map((item) =>
+    [item.name, item.address, item.phone, item.website, item.rating, item.reviewCount, item.category, item.hours]
+      .map((v) => (v || "").toString())
+      .join("\t")
+  );
+  const text = headers.join("\t") + "\n" + rows.join("\n");
+
+  navigator.clipboard.writeText(text).then(() => {
+    const origLabel = copyBtn.querySelector(".export-label");
+    const prev = origLabel.textContent;
+    origLabel.textContent = "Copied!";
+    setTimeout(() => {
+      origLabel.textContent = prev;
+    }, 1500);
+  });
+}
+
+// ── Wire export buttons ──
+jsonBtn.addEventListener("click", () => {
+  downloadJSON();
+});
+
+excelBtn.addEventListener("click", () => {
+  downloadExcel();
+});
+
+copyBtn.addEventListener("click", () => {
+  copyToClipboard();
+});
+
 // ── Data tab ──
 dataDownloadBtn.addEventListener("click", () => {
   downloadCSV();
@@ -323,7 +412,7 @@ dataClearBtn.addEventListener("click", () => {
   extractedData = [];
   chrome.runtime.sendMessage({ type: "clear-data" });
   refreshDataTab();
-  downloadBtn.disabled = true;
+  setExportEnabled(false);
   dataDownloadBtn.disabled = true;
   dataClearBtn.disabled = true;
   updateResultCount(0);
@@ -427,7 +516,7 @@ chrome.runtime.sendMessage({ type: "get-data" }, (response) => {
   if (response && response.data && response.data.length > 0) {
     extractedData = response.data;
     updateResultCount(extractedData.length);
-    downloadBtn.disabled = false;
+    setExportEnabled(true);
     setStatus("done");
     progressBar.classList.add("done");
     setProgress(extractedData.length, extractedData.length);
