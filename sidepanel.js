@@ -201,8 +201,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.status === "scrolling") {
       showResult(fetchResult);
       fetchCount.textContent = message.count || 0;
-      // Indeterminate — pulse the bar to ~60%
-      fetchProgressBar.style.width = "60%";
+      // Indeterminate — pulse the bar, but don't overwrite if already done
+      if (!fetchProgressBar.classList.contains("done")) {
+        fetchProgressBar.style.width = "60%";
+      }
     }
 
     if (message.status === "extracting" || message.status === "extracting-details") {

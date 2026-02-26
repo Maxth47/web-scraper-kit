@@ -242,9 +242,8 @@ h1 {
 }
 
 .step-content {
-  flex: 1 1 0;
-  width: 0;
-  overflow: hidden;
+  flex: 1;
+  min-width: 0;
 }
 
 .step-content .action-card,
@@ -315,6 +314,8 @@ h1 {
 .action-result {
   display: none;
   padding: 6px 2px 8px;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .action-result.visible {
