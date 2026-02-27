@@ -416,14 +416,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      // Send data to content script for enrichment
-      chrome.tabs.sendMessage(tab.id, { type: "enrich-data", data: dataToEnrich }, (response) => {
-        if (chrome.runtime.lastError) {
-          sendResponse({ error: "Cannot connect to page. Refresh Google Maps and try again." });
-          return;
+      // Re-inject content script in case context was invalidated, then send data
+      chrome.scripting.executeScript(
+        { target: { tabId: tab.id }, files: ["content.js"] },
+        () => {
+          chrome.tabs.sendMessage(tab.id, { type: "enrich-data", data: dataToEnrich }, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ error: "Cannot connect to page. Refresh Google Maps and try again." });
+              return;
+            }
+            sendResponse(response || { success: true });
+          });
         }
-        sendResponse(response || { success: true });
-      });
+      );
     });
     return true;
   }
