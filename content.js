@@ -4,6 +4,10 @@
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.type === "enrich-data") {
+      if (isExtracting) {
+        sendResponse({ error: "Extraction already in progress." });
+        return true;
+      }
       shouldStop = false;
       isExtracting = true;
       sendResponse({ success: true });
@@ -44,188 +48,213 @@
     );
   }
 
-  function getScrollContainer() {
+  function getResultItems() {
     const feed = getResultsFeed();
-    if (!feed) return null;
-    return (
-      feed.closest('div[role="main"]')?.querySelector("div[tabindex='-1']") ||
-      feed.parentElement
-    );
+    if (!feed) return [];
+    return Array.from(
+      feed.querySelectorAll(":scope > div > div[jsaction]")
+    ).filter((el) => el.querySelector('a[href*="/maps/place/"]'));
   }
 
-  // ── Enrich pre-extracted data with click-through ──
-  async function runEnrichment(data) {
-    try {
-      const total = data.length;
-      const dataByName = new Map();
-      for (const item of data) {
-        if (item.name) dataByName.set(item.name, item);
+  // ── Extract basic data from a list item (visible in feed) ──
+  function extractFromListItem(item) {
+    const data = {
+      name: "",
+      address: "",
+      phone: "",
+      website: "",
+      rating: "",
+      reviewCount: "",
+      category: "",
+      hours: "",
+      priceLevel: "",
+    };
+
+    // Name
+    const nameEl =
+      item.querySelector(".fontHeadlineSmall") ||
+      item.querySelector('[class*="fontHead"]');
+    if (nameEl) {
+      data.name = nameEl.textContent?.trim() || "";
+    }
+    if (!data.name) {
+      const link = item.querySelector('a[href*="/maps/place/"]');
+      if (link) {
+        data.name = link.getAttribute("aria-label") || "";
+      }
+    }
+
+    // Rating & reviews from aria-label
+    const ratingEl = item.querySelector('span[role="img"]');
+    if (ratingEl) {
+      const ariaLabel = ratingEl.getAttribute("aria-label") || "";
+      const ratingMatch = ariaLabel.match(/([\d.]+)\s*star/i);
+      if (ratingMatch) data.rating = ratingMatch[1];
+      const reviewMatch = ariaLabel.match(/([\d,]+)\s*review/i);
+      if (reviewMatch) data.reviewCount = reviewMatch[1].replace(/,/g, "");
+    }
+
+    if (!data.rating) {
+      const spans = item.querySelectorAll("span");
+      for (const span of spans) {
+        const t = span.textContent?.trim() || "";
+        if (/^\d\.\d$/.test(t)) {
+          data.rating = t;
+          break;
+        }
+      }
+    }
+
+    if (!data.reviewCount) {
+      const allText = item.textContent || "";
+      const parenMatch = allText.match(/\(([\d,]+)\)/);
+      if (parenMatch) data.reviewCount = parenMatch[1].replace(/,/g, "");
+    }
+
+    return data;
+  }
+
+  // ── Click through each item and extract detail panel data ──
+  // Follows the reference's extractWithClickThrough pattern exactly
+  async function extractWithClickThrough(items) {
+    const results = [];
+    const total = items.length;
+
+    for (let i = 0; i < items.length; i++) {
+      if (shouldStop) break;
+
+      sendProgress("extracting-details", i + 1, total);
+
+      // Extract what we can from the list view
+      const baseData = extractFromListItem(items[i]);
+
+      // Click the item to get detail panel data
+      const link = items[i].querySelector('a[href*="/maps/place/"]');
+      if (link && (!baseData.phone || !baseData.website || !baseData.hours)) {
+        try {
+          link.click();
+          await sleep(2000 + Math.random() * 500);
+
+          // Extract from the detail panel
+          const detailPanel =
+            document.querySelector('div[role="main"][aria-label]') ||
+            document.querySelector(".m6QErb.WNBkOb");
+
+          if (detailPanel) {
+            // Phone
+            if (!baseData.phone) {
+              const phoneButton = detailPanel.querySelector(
+                'button[data-item-id*="phone"], button[aria-label*="Phone"]'
+              );
+              if (phoneButton) {
+                baseData.phone =
+                  phoneButton
+                    .getAttribute("aria-label")
+                    ?.replace(/Phone:\s*/i, "")
+                    .trim() ||
+                  phoneButton.textContent?.trim() ||
+                  "";
+              }
+            }
+
+            // Website
+            if (!baseData.website) {
+              const websiteLink = detailPanel.querySelector(
+                'a[data-item-id*="authority"], a[aria-label*="Website"]'
+              );
+              if (websiteLink) {
+                baseData.website = websiteLink.href || "";
+              }
+            }
+
+            // Address
+            if (!baseData.address) {
+              const addressButton = detailPanel.querySelector(
+                'button[data-item-id*="address"], button[aria-label*="Address"]'
+              );
+              if (addressButton) {
+                baseData.address =
+                  addressButton
+                    .getAttribute("aria-label")
+                    ?.replace(/Address:\s*/i, "")
+                    .trim() ||
+                  addressButton.textContent?.trim() ||
+                  "";
+              }
+            }
+
+            // Hours
+            if (!baseData.hours) {
+              const hoursEl = detailPanel.querySelector(
+                'div[aria-label*="hour" i], button[aria-label*="hour" i]'
+              );
+              if (hoursEl) {
+                const label = hoursEl.getAttribute("aria-label") || "";
+                baseData.hours =
+                  label.split(".")[0]?.trim() ||
+                  hoursEl.textContent?.trim() ||
+                  "";
+              }
+            }
+
+            // Category
+            if (!baseData.category) {
+              const categoryButton = detailPanel.querySelector(
+                'button[jsaction*="category"]'
+              );
+              if (categoryButton) {
+                baseData.category =
+                  categoryButton.textContent?.trim() || "";
+              }
+            }
+          }
+
+          // Go back to list view
+          const backButton = document.querySelector(
+            'button[aria-label="Back"], button[jsaction*="back"]'
+          );
+          if (backButton) {
+            backButton.click();
+            await sleep(1500 + Math.random() * 500);
+          }
+        } catch (e) {
+          console.warn("Click-through extraction failed for item", i, e);
+        }
       }
 
-      sendProgress("extracting-details", 0, total);
+      results.push(baseData);
+    }
 
-      const feed = getResultsFeed();
-      if (!feed) {
-        console.warn("Enrichment: no feed found");
+    return results;
+  }
+
+  // ── Main enrichment entry point ──
+  async function runEnrichment(data) {
+    try {
+      sendProgress("extracting-details", 0, data.length);
+
+      // Get all items currently in DOM (loaded by the fetch step)
+      const items = getResultItems();
+
+      if (items.length === 0) {
+        console.warn("Enrichment: no items found in DOM");
         finishEnrichment(data);
         return;
       }
 
-      const scrollContainer = getScrollContainer();
+      // Run click-through enrichment on all DOM items
+      const results = await extractWithClickThrough(items);
 
-      // Scroll to top
-      if (scrollContainer) {
-        scrollContainer.scrollTop = 0;
+      if (shouldStop) {
+        finishEnrichment(results.length > 0 ? results : data);
       } else {
-        feed.scrollTop = 0;
+        finishEnrichment(results);
       }
-      await sleep(800);
-
-      let processed = 0;
-      let scrollMisses = 0;
-      const maxScrollMisses = 30;
-      const processedNames = new Set();
-
-      while (processedNames.size < dataByName.size && scrollMisses < maxScrollMisses && !shouldStop) {
-        // Get all currently visible listing links
-        const links = document.querySelectorAll("a.hfpxzc");
-        let foundNew = false;
-
-        for (const link of links) {
-          if (shouldStop) break;
-
-          const label = link.getAttribute("aria-label") || "";
-          if (!label || processedNames.has(label)) continue;
-
-          const item = dataByName.get(label);
-          if (!item) {
-            processedNames.add(label); // skip unknown listings
-            continue;
-          }
-
-          processedNames.add(label);
-          foundNew = true;
-          processed++;
-
-          sendProgress("extracting-details", processed, total);
-
-          try {
-            // Scroll the link into view and click it
-            link.scrollIntoView({ block: "center", behavior: "instant" });
-            await sleep(300);
-            link.click();
-            await sleep(2000 + Math.random() * 500);
-
-            // Wait for detail panel to load
-            let detailLoaded = false;
-            for (let r = 0; r < 8 && !detailLoaded; r++) {
-              detailLoaded = !!document.querySelector(
-                'button[data-item-id*="phone"], button[data-item-id*="address"], a[data-item-id*="authority"]'
-              );
-              if (!detailLoaded) await sleep(600);
-            }
-
-            if (detailLoaded) {
-              extractDetailFields(item);
-            }
-
-            // Go back to list
-            const backBtn = document.querySelector(
-              'button[aria-label="Back"], button[jsaction*="back"]'
-            );
-            if (backBtn) {
-              backBtn.click();
-              await sleep(1500 + Math.random() * 500);
-            } else {
-              history.back();
-              await sleep(2000);
-            }
-
-            // Wait for feed to reappear
-            for (let r = 0; r < 10 && !getResultsFeed(); r++) {
-              await sleep(600);
-            }
-            await sleep(300);
-          } catch (e) {
-            console.warn("Click-through failed for", label, e);
-          }
-
-          // After going back, the DOM has changed — break out of inner for loop
-          // and re-query links in the next while iteration
-          break;
-        }
-
-        if (shouldStop) break;
-
-        // If we've processed all items, we're done
-        if (processedNames.size >= dataByName.size) break;
-
-        // No new item found in visible links — scroll down
-        if (!foundNew) {
-          scrollMisses++;
-          if (scrollContainer) {
-            scrollContainer.scrollTop += 400;
-          } else {
-            feed.scrollTop += 400;
-          }
-          await sleep(800);
-
-          // Check for end of list
-          const feedText = feed.textContent || "";
-          if (feedText.includes("You've reached the end") || feedText.includes("No more results")) {
-            break;
-          }
-        } else {
-          scrollMisses = 0;
-        }
-      }
-
-      finishEnrichment(data);
     } catch (err) {
       console.error("Enrichment error:", err);
       finishEnrichment(data);
     } finally {
       isExtracting = false;
-    }
-  }
-
-  function extractDetailFields(item) {
-    if (!item.phone) {
-      const phoneBtn = document.querySelector('button[data-item-id*="phone"]');
-      if (phoneBtn) {
-        const label = phoneBtn.getAttribute("aria-label") || "";
-        item.phone =
-          label.replace(/^Phone:\s*/i, "").trim() ||
-          phoneBtn.textContent?.replace(/[^\d\s\-\(\)+]/g, "").trim() || "";
-      }
-    }
-
-    if (!item.website) {
-      const webLink = document.querySelector('a[data-item-id*="authority"]');
-      if (webLink) item.website = webLink.href || "";
-    }
-
-    if (!item.address) {
-      const addrBtn = document.querySelector('button[data-item-id*="address"]');
-      if (addrBtn) {
-        const label = addrBtn.getAttribute("aria-label") || "";
-        item.address =
-          label.replace(/^Address:\s*/i, "").trim() ||
-          addrBtn.textContent?.trim() || "";
-      }
-    }
-
-    if (!item.hours) {
-      const hoursEl = document.querySelector('[data-item-id*="oh"], [aria-label*="hour" i]');
-      if (hoursEl) {
-        const label = hoursEl.getAttribute("aria-label") || "";
-        item.hours = label.split(".")[0]?.trim() || hoursEl.textContent?.trim() || "";
-      }
-    }
-
-    if (!item.category) {
-      const catBtn = document.querySelector('button[jsaction*="category"]');
-      if (catBtn) item.category = catBtn.textContent?.trim() || "";
     }
   }
 
