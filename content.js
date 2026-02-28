@@ -37,6 +37,12 @@
     }
   }
 
+  function sendDebug(msg) {
+    try {
+      chrome.runtime.sendMessage({ type: "debug-log", msg });
+    } catch (e) {}
+  }
+
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
   }
@@ -114,143 +120,173 @@
     return data;
   }
 
-  // ── Click through each item and extract detail panel data ──
-  // Follows the reference's extractWithClickThrough pattern exactly
-  async function extractWithClickThrough(items) {
-    const results = [];
-    const total = items.length;
+  // ── Extract detail fields from the detail panel ──
+  function extractDetailFromPanel(baseData) {
+    const detailPanel =
+      document.querySelector('div[role="main"][aria-label]') ||
+      document.querySelector(".m6QErb.WNBkOb");
 
-    for (let i = 0; i < items.length; i++) {
-      if (shouldStop) break;
+    if (!detailPanel) {
+      sendDebug(`  detail panel: NOT FOUND`);
+      return;
+    }
+    sendDebug(`  detail panel: found`);
 
-      sendProgress("extracting-details", i + 1, total);
-
-      // Extract what we can from the list view
-      const baseData = extractFromListItem(items[i]);
-
-      // Click the item to get detail panel data
-      const link = items[i].querySelector('a[href*="/maps/place/"]');
-      if (link && (!baseData.phone || !baseData.website || !baseData.hours)) {
-        try {
-          link.click();
-          await sleep(2000 + Math.random() * 500);
-
-          // Extract from the detail panel
-          const detailPanel =
-            document.querySelector('div[role="main"][aria-label]') ||
-            document.querySelector(".m6QErb.WNBkOb");
-
-          if (detailPanel) {
-            // Phone
-            if (!baseData.phone) {
-              const phoneButton = detailPanel.querySelector(
-                'button[data-item-id*="phone"], button[aria-label*="Phone"]'
-              );
-              if (phoneButton) {
-                baseData.phone =
-                  phoneButton
-                    .getAttribute("aria-label")
-                    ?.replace(/Phone:\s*/i, "")
-                    .trim() ||
-                  phoneButton.textContent?.trim() ||
-                  "";
-              }
-            }
-
-            // Website
-            if (!baseData.website) {
-              const websiteLink = detailPanel.querySelector(
-                'a[data-item-id*="authority"], a[aria-label*="Website"]'
-              );
-              if (websiteLink) {
-                baseData.website = websiteLink.href || "";
-              }
-            }
-
-            // Address
-            if (!baseData.address) {
-              const addressButton = detailPanel.querySelector(
-                'button[data-item-id*="address"], button[aria-label*="Address"]'
-              );
-              if (addressButton) {
-                baseData.address =
-                  addressButton
-                    .getAttribute("aria-label")
-                    ?.replace(/Address:\s*/i, "")
-                    .trim() ||
-                  addressButton.textContent?.trim() ||
-                  "";
-              }
-            }
-
-            // Hours
-            if (!baseData.hours) {
-              const hoursEl = detailPanel.querySelector(
-                'div[aria-label*="hour" i], button[aria-label*="hour" i]'
-              );
-              if (hoursEl) {
-                const label = hoursEl.getAttribute("aria-label") || "";
-                baseData.hours =
-                  label.split(".")[0]?.trim() ||
-                  hoursEl.textContent?.trim() ||
-                  "";
-              }
-            }
-
-            // Category
-            if (!baseData.category) {
-              const categoryButton = detailPanel.querySelector(
-                'button[jsaction*="category"]'
-              );
-              if (categoryButton) {
-                baseData.category =
-                  categoryButton.textContent?.trim() || "";
-              }
-            }
-          }
-
-          // Go back to list view
-          const backButton = document.querySelector(
-            'button[aria-label="Back"], button[jsaction*="back"]'
-          );
-          if (backButton) {
-            backButton.click();
-            await sleep(1500 + Math.random() * 500);
-          }
-        } catch (e) {
-          console.warn("Click-through extraction failed for item", i, e);
-        }
+    if (!baseData.phone) {
+      const phoneButton = detailPanel.querySelector(
+        'button[data-item-id*="phone"], button[aria-label*="Phone"]'
+      );
+      if (phoneButton) {
+        baseData.phone =
+          phoneButton.getAttribute("aria-label")?.replace(/Phone:\s*/i, "").trim() ||
+          phoneButton.textContent?.trim() || "";
       }
-
-      results.push(baseData);
     }
 
-    return results;
+    if (!baseData.website) {
+      const websiteLink = detailPanel.querySelector(
+        'a[data-item-id*="authority"], a[aria-label*="Website"]'
+      );
+      if (websiteLink) baseData.website = websiteLink.href || "";
+    }
+
+    if (!baseData.address) {
+      const addressButton = detailPanel.querySelector(
+        'button[data-item-id*="address"], button[aria-label*="Address"]'
+      );
+      if (addressButton) {
+        baseData.address =
+          addressButton.getAttribute("aria-label")?.replace(/Address:\s*/i, "").trim() ||
+          addressButton.textContent?.trim() || "";
+      }
+    }
+
+    if (!baseData.hours) {
+      const hoursEl = detailPanel.querySelector(
+        'div[aria-label*="hour" i], button[aria-label*="hour" i]'
+      );
+      if (hoursEl) {
+        const label = hoursEl.getAttribute("aria-label") || "";
+        baseData.hours = label.split(".")[0]?.trim() || hoursEl.textContent?.trim() || "";
+      }
+    }
+
+    if (!baseData.category) {
+      const categoryButton = detailPanel.querySelector('button[jsaction*="category"]');
+      if (categoryButton) baseData.category = categoryButton.textContent?.trim() || "";
+    }
+
+    sendDebug(`  got: phone=${baseData.phone || "-"} web=${baseData.website ? "yes" : "-"} addr=${baseData.address ? "yes" : "-"}`);
   }
 
   // ── Main enrichment entry point ──
+  // Re-queries DOM items after each click+back to avoid stale references
   async function runEnrichment(data) {
     try {
-      sendProgress("extracting-details", 0, data.length);
+      const total = data.length;
+      sendDebug(`Enrichment started. Pre-fetched: ${total} items`);
+      sendProgress("extracting-details", 0, total);
 
-      // Get all items currently in DOM (loaded by the fetch step)
-      const items = getResultItems();
+      const results = [];
+      const processedNames = new Set();
+      let processed = 0;
 
-      if (items.length === 0) {
-        console.warn("Enrichment: no items found in DOM");
-        finishEnrichment(data);
-        return;
+      while (!shouldStop) {
+        // Fresh DOM query each round — items change after click+back
+        const items = getResultItems();
+        sendDebug(`DOM items found: ${items.length}`);
+
+        if (items.length === 0) {
+          sendDebug(`No items in DOM — waiting for list...`);
+          // Wait for list to reappear
+          for (let r = 0; r < 10 && getResultItems().length === 0; r++) {
+            await sleep(600);
+          }
+          if (getResultItems().length === 0) {
+            sendDebug(`List never reappeared — aborting`);
+            break;
+          }
+          continue; // Re-query
+        }
+
+        let foundNew = false;
+
+        for (let i = 0; i < items.length; i++) {
+          if (shouldStop) break;
+
+          const link = items[i].querySelector('a[href*="/maps/place/"]');
+          const name =
+            link?.getAttribute("aria-label") ||
+            items[i].querySelector(".fontHeadlineSmall")?.textContent?.trim() ||
+            "";
+
+          if (!name || processedNames.has(name)) continue;
+          processedNames.add(name);
+          foundNew = true;
+          processed++;
+
+          sendProgress("extracting-details", processed, total);
+
+          // Extract basic data from list view
+          const baseData = extractFromListItem(items[i]);
+
+          sendDebug(`[${processed}/${total}] "${name}"`);
+
+          // Click through for detail data
+          if (link && (!baseData.phone || !baseData.website || !baseData.hours)) {
+            try {
+              sendDebug(`  clicking...`);
+              link.click();
+              await sleep(2000 + Math.random() * 500);
+
+              extractDetailFromPanel(baseData);
+
+              // Go back to list view
+              const backButton = document.querySelector(
+                'button[aria-label="Back"], button[jsaction*="back"]'
+              );
+              if (backButton) {
+                sendDebug(`  back → list`);
+                backButton.click();
+                await sleep(1500 + Math.random() * 500);
+              } else {
+                sendDebug(`  NO back button`);
+              }
+
+              // Wait for feed to reappear before continuing
+              for (let r = 0; r < 10 && !getResultsFeed(); r++) {
+                await sleep(600);
+              }
+              await sleep(300);
+            } catch (e) {
+              sendDebug(`  ERROR: ${e.message}`);
+            }
+          } else if (!link) {
+            sendDebug(`  SKIP: no link`);
+          } else {
+            sendDebug(`  SKIP: has data`);
+          }
+
+          results.push(baseData);
+
+          // Break after each click+back to re-query fresh DOM
+          break;
+        }
+
+        if (shouldStop) break;
+        if (processed >= total) break;
+
+        // If no new items found this round, we've processed all visible items
+        if (!foundNew) {
+          sendDebug(`No new items — done`);
+          break;
+        }
       }
 
-      // Run click-through enrichment on all DOM items
-      const results = await extractWithClickThrough(items);
-
-      if (shouldStop) {
-        finishEnrichment(results.length > 0 ? results : data);
-      } else {
-        finishEnrichment(results);
-      }
+      sendDebug(`Enrichment complete: ${results.length} items`);
+      finishEnrichment(results.length > 0 ? results : data);
     } catch (err) {
+      sendDebug(`FATAL: ${err.message}`);
       console.error("Enrichment error:", err);
       finishEnrichment(data);
     } finally {

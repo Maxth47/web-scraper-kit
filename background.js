@@ -1,8 +1,17 @@
 let extractedData = [];
+let activeTabId = null; // Store the Maps tab ID so we don't rely on "active" tab
 
 // Open side panel when extension icon is clicked
 chrome.action.onClicked.addListener((tab) => {
   chrome.sidePanel.open({ windowId: tab.windowId });
+});
+
+// Keep service worker alive while sidepanel is open
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === "keepalive") {
+    // Port keeps the service worker alive as long as sidepanel is open
+    port.onDisconnect.addListener(() => {});
+  }
 });
 
 // ── Debugger-based scroll for Google Maps ──
@@ -354,6 +363,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      activeTabId = tab.id; // Store for later use
       sendResponse({ success: true });
       shouldStopScroll = false;
 
@@ -400,62 +410,101 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // Main extraction: send fetched data to content script for click-through enrichment
   if (message.type === "start-extraction") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      const tab = tabs[0];
-      if (!tab || !tab.url || !tab.url.includes("google.com/maps")) {
-        sendResponse({ error: "Please navigate to Google Maps first." });
-        return;
-      }
+    const tabId = activeTabId;
 
-      const dataToEnrich = extractedData && extractedData.length > 0
-        ? extractedData
-        : [];
-
-      if (dataToEnrich.length === 0) {
-        sendResponse({ error: "No fetched listings. Run Fetch Listings first." });
-        return;
-      }
-
-      // Re-inject content script in case context was invalidated, then send data
-      chrome.scripting.executeScript(
-        { target: { tabId: tab.id }, files: ["content.js"] },
-        () => {
-          chrome.tabs.sendMessage(tab.id, { type: "enrich-data", data: dataToEnrich }, (response) => {
-            if (chrome.runtime.lastError) {
-              sendResponse({ error: "Cannot connect to page. Refresh Google Maps and try again." });
-              return;
-            }
-            sendResponse(response || { success: true });
-          });
+    if (!tabId) {
+      // Fallback: try to find the Maps tab
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        const tab = tabs[0];
+        if (!tab || !tab.url || !tab.url.includes("google.com/maps")) {
+          sendResponse({ error: "Please navigate to Google Maps first." });
+          return;
         }
-      );
-    });
+        activeTabId = tab.id;
+        startEnrichment(tab.id, sendResponse);
+      });
+    } else {
+      startEnrichment(tabId, sendResponse);
+    }
     return true;
   }
 
   if (message.type === "stop-extraction") {
     shouldStopScroll = true;
-    // Also relay to content script
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0] && tabs[0].url && tabs[0].url.includes("google.com/maps")) {
-        chrome.tabs.sendMessage(tabs[0].id, message, () => {});
-      }
-    });
+    // Relay to content script using stored tab ID
+    if (activeTabId) {
+      chrome.tabs.sendMessage(activeTabId, message, () => {
+        if (chrome.runtime.lastError) { /* tab may be gone */ }
+      });
+    }
     sendResponse({ success: true });
     return true;
   }
 
   // Relay to content script
   if (message.type === "get-listing-count") {
-    chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-      if (tabs[0] && tabs[0].url && tabs[0].url.includes("google.com/maps")) {
-        chrome.tabs.sendMessage(tabs[0].id, message, (response) => {
-          sendResponse(response || { success: true });
-        });
-      } else {
-        sendResponse({ error: "Please navigate to Google Maps first." });
-      }
-    });
+    const tabId = activeTabId;
+    if (tabId) {
+      chrome.tabs.sendMessage(tabId, message, (response) => {
+        if (chrome.runtime.lastError) {
+          sendResponse({ count: 0 });
+          return;
+        }
+        sendResponse(response || { count: 0 });
+      });
+    } else {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (tabs[0] && tabs[0].url && tabs[0].url.includes("google.com/maps")) {
+          activeTabId = tabs[0].id;
+          chrome.tabs.sendMessage(tabs[0].id, message, (response) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ count: 0 });
+              return;
+            }
+            sendResponse(response || { count: 0 });
+          });
+        } else {
+          sendResponse({ count: 0 });
+        }
+      });
+    }
     return true;
   }
 });
+
+// Helper: start enrichment on a specific tab
+function startEnrichment(tabId, sendResponse) {
+  const dataToEnrich = extractedData && extractedData.length > 0
+    ? extractedData
+    : [];
+
+  if (dataToEnrich.length === 0) {
+    sendResponse({ error: "No fetched listings. Run Fetch Listings first." });
+    return;
+  }
+
+  // Try sending directly first; if content script is gone, re-inject once
+  chrome.tabs.sendMessage(tabId, { type: "enrich-data", data: dataToEnrich }, (response) => {
+    if (chrome.runtime.lastError) {
+      // Content script not responding — re-inject and retry
+      chrome.scripting.executeScript(
+        { target: { tabId }, files: ["content.js"] },
+        () => {
+          if (chrome.runtime.lastError) {
+            sendResponse({ error: "Cannot connect to page. Refresh Google Maps and try again." });
+            return;
+          }
+          chrome.tabs.sendMessage(tabId, { type: "enrich-data", data: dataToEnrich }, (resp) => {
+            if (chrome.runtime.lastError) {
+              sendResponse({ error: "Cannot connect to page. Refresh Google Maps and try again." });
+              return;
+            }
+            sendResponse(resp || { success: true });
+          });
+        }
+      );
+      return;
+    }
+    sendResponse(response || { success: true });
+  });
+}

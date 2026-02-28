@@ -628,6 +628,27 @@ h1 {
   to { opacity: 1; transform: translateY(0); }
 }
 
+/* ── Debug Log ── */
+.debug-log {
+  margin-top: 12px;
+  padding: 8px 10px;
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  border-radius: var(--radius);
+  font-family: "SF Mono", "Menlo", "Consolas", monospace;
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  max-height: 120px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+}
+
+.debug-log:empty {
+  display: none;
+}
+
 /* ── Data Tab ── */
 .data-toolbar {
   display: flex;

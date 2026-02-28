@@ -1,3 +1,14 @@
+// ── Keep service worker alive ──
+// Maintain a port connection so the background service worker doesn't get terminated
+// during long-running operations (fetch scrolling, enrichment click-through)
+(function keepAlive() {
+  let port = chrome.runtime.connect({ name: "keepalive" });
+  port.onDisconnect.addListener(() => {
+    // Reconnect if disconnected (service worker restarted)
+    port = chrome.runtime.connect({ name: "keepalive" });
+  });
+})();
+
 // ── Theme toggle ──
 const themeToggle = document.getElementById("themeToggle");
 const savedTheme = localStorage.getItem("theme");
@@ -194,8 +205,17 @@ function saveToHistory(data, status) {
   });
 }
 
+// ── Debug log ──
+const debugLog = document.getElementById("debugLog");
+
 // ── Listen for progress messages ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type === "debug-log") {
+    debugLog.textContent += message.msg + "\n";
+    debugLog.scrollTop = debugLog.scrollHeight;
+    return;
+  }
+
   if (message.type === "progress") {
 
     if (message.status === "scrolling") {
@@ -305,6 +325,7 @@ startBtn.addEventListener("click", () => {
   showResult(extractResult);
   setExportEnabled(false);
   errorMsg.classList.remove("visible");
+  debugLog.textContent = "";
 
   chrome.runtime.sendMessage({ type: "start-extraction" }, (response) => {
     if (chrome.runtime.lastError) {
