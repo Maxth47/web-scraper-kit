@@ -37,11 +37,6 @@
     }
   }
 
-  function sendDebug(msg) {
-    try {
-      chrome.runtime.sendMessage({ type: "debug-log", msg });
-    } catch (e) {}
-  }
 
   function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -127,10 +122,8 @@
       document.querySelector(".m6QErb.WNBkOb");
 
     if (!detailPanel) {
-      sendDebug(`  detail panel: NOT FOUND`);
       return;
     }
-    sendDebug(`  detail panel: found`);
 
     if (!baseData.phone) {
       const phoneButton = detailPanel.querySelector(
@@ -176,7 +169,6 @@
       if (categoryButton) baseData.category = categoryButton.textContent?.trim() || "";
     }
 
-    sendDebug(`  got: phone=${baseData.phone || "-"} web=${baseData.website ? "yes" : "-"} addr=${baseData.address ? "yes" : "-"}`);
   }
 
   // ── Main enrichment entry point ──
@@ -184,7 +176,6 @@
   async function runEnrichment(data) {
     try {
       const total = data.length;
-      sendDebug(`Enrichment started. Pre-fetched: ${total} items`);
       sendProgress("extracting-details", 0, total);
 
       const results = [];
@@ -194,16 +185,13 @@
       while (!shouldStop) {
         // Fresh DOM query each round — items change after click+back
         const items = getResultItems();
-        sendDebug(`DOM items found: ${items.length}`);
 
         if (items.length === 0) {
-          sendDebug(`No items in DOM — waiting for list...`);
           // Wait for list to reappear
           for (let r = 0; r < 10 && getResultItems().length === 0; r++) {
             await sleep(600);
           }
           if (getResultItems().length === 0) {
-            sendDebug(`List never reappeared — aborting`);
             break;
           }
           continue; // Re-query
@@ -230,12 +218,10 @@
           // Extract basic data from list view
           const baseData = extractFromListItem(items[i]);
 
-          sendDebug(`[${processed}/${total}] "${name}"`);
 
           // Click through for detail data
           if (link && (!baseData.phone || !baseData.website || !baseData.hours)) {
             try {
-              sendDebug(`  clicking...`);
               link.click();
               await sleep(2000 + Math.random() * 500);
 
@@ -246,11 +232,9 @@
                 'button[aria-label="Back"], button[jsaction*="back"]'
               );
               if (backButton) {
-                sendDebug(`  back → list`);
                 backButton.click();
                 await sleep(1500 + Math.random() * 500);
               } else {
-                sendDebug(`  NO back button`);
               }
 
               // Wait for feed to reappear before continuing
@@ -259,12 +243,8 @@
               }
               await sleep(300);
             } catch (e) {
-              sendDebug(`  ERROR: ${e.message}`);
+              console.warn("Click-through failed", e);
             }
-          } else if (!link) {
-            sendDebug(`  SKIP: no link`);
-          } else {
-            sendDebug(`  SKIP: has data`);
           }
 
           results.push(baseData);
@@ -278,15 +258,12 @@
 
         // If no new items found this round, we've processed all visible items
         if (!foundNew) {
-          sendDebug(`No new items — done`);
           break;
         }
       }
 
-      sendDebug(`Enrichment complete: ${results.length} items`);
       finishEnrichment(results.length > 0 ? results : data);
     } catch (err) {
-      sendDebug(`FATAL: ${err.message}`);
       console.error("Enrichment error:", err);
       finishEnrichment(data);
     } finally {

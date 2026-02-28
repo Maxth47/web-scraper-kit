@@ -30,7 +30,9 @@ const extractProgressBar = document.getElementById("extractProgressBar");
 const extractCount = document.getElementById("extractCount");
 const extractStats = document.getElementById("extractStats");
 const optimizeBtn = document.getElementById("optimizeBtn");
+const optimizeIcon = optimizeBtn.querySelector(".action-icon");
 const startBtn = document.getElementById("startBtn");
+const startIcon = startBtn.querySelector(".action-icon");
 const stopBtn = document.getElementById("stopBtn");
 const downloadBtn = document.getElementById("downloadBtn");
 const jsonBtn = document.getElementById("jsonBtn");
@@ -205,17 +207,8 @@ function saveToHistory(data, status) {
   });
 }
 
-// ── Debug log ──
-const debugLog = document.getElementById("debugLog");
-
 // ── Listen for progress messages ──
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message.type === "debug-log") {
-    debugLog.textContent += message.msg + "\n";
-    debugLog.scrollTop = debugLog.scrollHeight;
-    return;
-  }
-
   if (message.type === "progress") {
 
     if (message.status === "scrolling") {
@@ -230,10 +223,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message.status === "extracting" || message.status === "extracting-details") {
       showResult(extractResult);
       setActionProgress(extractProgressBar, message.count, message.total);
-      updateResultCount(message.total || 0);
+      extractCount.textContent = `${message.count || 0} / ${message.total || 0}`;
     }
 
     if (message.status === "optimize-done") {
+      optimizeIcon.classList.remove("spinning");
       markStepDone(1);
       setBusy(false);
       updateResultCount(message.count || 0);
@@ -250,6 +244,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.status === "done") {
+      startIcon.classList.remove("spinning");
       markStepDone(2);
       setBusy(false);
       updateResultCount(message.count || 0);
@@ -266,6 +261,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.status === "stopped") {
+      optimizeIcon.classList.remove("spinning");
+      startIcon.classList.remove("spinning");
       setBusy(false);
       // Hide progress bars but keep any counts shown
       fetchProgressBar.style.width = "0%";
@@ -281,6 +278,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     if (message.status === "error") {
+      optimizeIcon.classList.remove("spinning");
+      startIcon.classList.remove("spinning");
       setBusy(false);
       fetchProgressBar.style.width = "0%";
       extractProgressBar.style.width = "0%";
@@ -290,7 +289,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 // ── Menu tab actions ──
 optimizeBtn.addEventListener("click", () => {
-
+  optimizeIcon.classList.add("spinning");
   setBusy(true);
   resetStepDone(1);
   resetStepDone(2);
@@ -319,13 +318,13 @@ optimizeBtn.addEventListener("click", () => {
 });
 
 startBtn.addEventListener("click", () => {
+  startIcon.classList.add("spinning");
   setBusy(true);
   resetStepDone(2);
   resetResult(extractResult, extractProgressBar);
   showResult(extractResult);
   setExportEnabled(false);
   errorMsg.classList.remove("visible");
-  debugLog.textContent = "";
 
   chrome.runtime.sendMessage({ type: "start-extraction" }, (response) => {
     if (chrome.runtime.lastError) {
